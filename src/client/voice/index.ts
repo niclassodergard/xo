@@ -1,7 +1,7 @@
 import { effect } from '@preact/signals';
 import { LIMITS } from '../../shared/api.ts';
 import { api, ApiError } from '../lib/api.ts';
-import { engine, onKeyUp, registerCommand } from '../lib/keys.ts';
+import { engine, isTextEntry, mode, onKeyUp, registerCommand } from '../lib/keys.ts';
 import { navigate, route } from '../lib/router.ts';
 import {
   appendVoiceDraft, chatDraft, epoch, flash, focusChatInput, overlay, people, personPicker, promptRequest, session,
@@ -99,8 +99,22 @@ export function initVoice(): () => void {
   // and keeps Space/Alt+Space from falling through (page scroll) while lower layers are blocked.
   let removeModal: (() => void)[] | null = null;
   const cancelByKey = (): void => { heldBy = null; c.cancel(); };
+  // At the Send/Discard prompt a text field must not hold focus: in INSERT mode the modal Enter/Esc layer would
+  // not see Enter, and the field would act on it (chat would send the draft). Blur it, put it back afterwards.
+  let blurred: HTMLElement | null = null;
   const stopWatch = effect(() => {
-    const active = c.state.value.phase !== 'idle';
+    const phase = c.state.value.phase;
+    if (phase === 'confirming' && !blurred && isTextEntry(document.activeElement)) {
+      blurred = document.activeElement as HTMLElement;
+      blurred.blur();
+      mode.value = 'normal';
+    } else if (phase === 'idle' && blurred) {
+      const el = blurred;
+      blurred = null;
+      const a = document.activeElement;
+      if (el.isConnected && (a === null || a === document.body)) el.focus();
+    }
+    const active = phase !== 'idle';
     if (active && !removeModal) {
       removeModal = [
         engine.addLayer({

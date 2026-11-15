@@ -47,6 +47,13 @@ export function Help() {
         {section('Global', rows('global'))}
         {section('This view', rows('view'))}
         {section('Lists', rows('list'))}
+        <div class="help-section">
+          <h3>Chat input (typing; not listed above)</h3>
+          <div class="help-row"><kbd>↑</kbd><span>in an empty input: leave it and select the newest capture</span></div>
+          <div class="help-row"><kbd>Alt-↑</kbd><span>recall an earlier text (Option on macOS); typed text is kept</span></div>
+          <div class="help-row"><kbd>Alt-↓</kbd><span>recall a newer text; past the newest brings your typed text back</span></div>
+          <div class="help-row"><kbd>Enter</kbd><span>send</span></div>
+        </div>
         <div class="hint">Esc or ? to close</div>
       </Pane>
     </Overlay>

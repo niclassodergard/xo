@@ -207,6 +207,8 @@ export default function Person() {
     {
       tab: () => setPane((p) => cyclePane(p, PANE_COUNT, 1)),
       'shift+tab': () => setPane((p) => cyclePane(p, PANE_COUNT, -1)),
+      left: () => setPane((p) => cyclePane(p, PANE_COUNT, -1)),
+      right: () => setPane((p) => cyclePane(p, PANE_COUNT, 1)),
       a: () => askText('Add agenda item', addAgenda),
       s: start,
       u: undo,
@@ -217,12 +219,14 @@ export default function Person() {
     {
       enabled: state !== null,
       descriptions: {
-        tab: 'next pane', 'shift+tab': 'previous pane', a: 'add agenda item', s: 'start or resume 1-1', u: 'undo the last done/drop here',
+        tab: 'next pane', 'shift+tab': 'previous pane', right: 'next pane', left: 'previous pane', a: 'add agenda item', s: 'start or resume 1-1', u: 'undo the last done/drop here',
         e: 'edit name and aliases', n: 'edit person notes', m: 'load older notes/meetings',
       },
     },
   );
   useKeys({ r: () => { void load(); } }, { enabled: state === null && error !== null });
+  // While loading or after an error ←/→ do nothing here, rather than switching the view.
+  useKeys({ left: () => undefined, right: () => undefined }, { enabled: state === null });
 
   if (!state) {
     return <Pane title="Person">{error ? <div>{error}<div class="hint">r to retry, Esc to go back</div></div> : <div class="dim">Loading…</div>}</Pane>;

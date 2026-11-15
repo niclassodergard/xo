@@ -76,6 +76,26 @@ export function questionTarget(captures: Capture[], selectedId: Id | null): Capt
   return null;
 }
 
+/**
+ * Keys of the answer options in display order (candidates first, then options), restricted to keys that
+ * can be pressed. ←/→ step through these in Chat; Enter answers with the highlighted one.
+ */
+export function highlightKeys(q: CaptureQuestion): string[] {
+  const pressable = new Set(questionKeys(q));
+  return questionChoices(q).map((o) => o.key).filter((k) => pressable.has(k));
+}
+
+/**
+ * Next highlighted option for ←/→ (clamped, no wrap). With nothing highlighted (or a stale key) → picks the
+ * first option and ← the last. null when the question has no options.
+ */
+export function stepOption(keys: string[], current: string | null, dir: 'left' | 'right'): string | null {
+  if (keys.length === 0) return null;
+  const i = current === null ? -1 : keys.indexOf(current);
+  if (i < 0) return dir === 'right' ? keys[0]! : keys[keys.length - 1]!;
+  return keys[Math.min(Math.max(i + (dir === 'right' ? 1 : -1), 0), keys.length - 1)]!;
+}
+
 export function questionPrompt(q: CaptureQuestion): string {
   switch (q.type) {
     case 'kind': return 'What is this?';
@@ -235,6 +255,60 @@ export function recallStep(texts: string[], cursor: number, dir: 'up' | 'down'):
   const start = Math.min(Math.max(cursor, 0), texts.length);
   const next = dir === 'up' ? Math.max(start - 1, 0) : Math.min(start + 1, texts.length);
   return { cursor: next, text: texts[next] ?? '' };
+}
+
+/** Where history recall stands: the entry shown and its position in the history. */
+export interface RecallPos { cursor: number; text: string }
+/** Text typed before recall replaced it (kept in the store, see `chatStash`). */
+export interface Stash { text: string; source: 'text' | 'voice' }
+export interface RecallResult {
+  /** null = not recalling (the draft is the restored stash or empty). */
+  pos: RecallPos | null;
+  /** The new input text and where it came from. */
+  text: string; source: 'text' | 'voice';
+  stash: Stash | null;
+}
+
+/**
+ * Alt-↑ / Alt-↓ in the chat input, from an empty or a non-empty line.
+ * - Fresh typing (no recall in progress and no stash yet) is stashed, never lost.
+ * - Once a stash exists it stays, whatever happens to the recalled line: editing a recalled line never
+ *   overwrites it. It comes back (with its source) when stepping down past the newest entry.
+ * - `pos` is only the position in this Chat; after a remount it is null while the stash survives.
+ */
+export function recallNext(
+  texts: string[], pos: RecallPos | null, draft: string, draftSource: 'text' | 'voice', stash: Stash | null, dir: 'up' | 'down',
+): RecallResult {
+  const recalling = pos !== null && draft === pos.text;
+  const st = stash ?? (!recalling && draft !== '' ? { text: draft, source: draftSource } : null);
+  const step = recallStep(texts, recalling ? pos.cursor : texts.length, dir);
+  if (step.cursor >= texts.length) {
+    return st
+      ? { pos: null, text: st.text, source: st.source, stash: null }
+      : { pos: null, text: '', source: 'text', stash: null };
+  }
+  return { pos: { cursor: step.cursor, text: step.text }, text: step.text, source: 'text', stash: st };
+}
+
+export type InputArrow = 'recall' | 'leave' | 'native';
+
+/**
+ * What an arrow key does in the chat input. Alt/Option-↑/↓ recall history (empty or not); plain ↑ in an empty
+ * input leaves it for the newest capture; everything else (plain ↓, ↑ with text, ←/→, Shift/Ctrl/Cmd
+ * combinations) keeps the native caret behaviour.
+ */
+export function inputArrow(o: {
+  dir: 'up' | 'down'; ctrl: boolean; shift: boolean; alt: boolean; meta: boolean; draft: string; hasCaptures: boolean;
+}): InputArrow {
+  if (o.shift || o.ctrl || o.meta) return 'native';
+  if (o.alt) return 'recall';
+  if (o.dir === 'up' && o.draft === '' && o.hasCaptures) return 'leave';
+  return 'native';
+}
+
+/** ↓ on the selected capture: step down, or return to the input when it is the newest (or there is none). */
+export function downAction(selIndex: number, count: number): 'move' | 'input' {
+  return selIndex >= count - 1 ? 'input' : 'move';
 }
 
 export function formatTime(iso: string): string {

@@ -5,17 +5,18 @@ import type { AnswerCaptureRequest, CreateCaptureRequest } from '../../shared/ap
 import type { Capture } from '../../shared/types.ts';
 import { Pane } from '../components/Pane.tsx';
 import { api, ApiError } from '../lib/api.ts';
-import { composing, useKeys } from '../lib/keys.ts';
+import { composing, modalOpen, mode, useKeys } from '../lib/keys.ts';
 import type { KeyHandler } from '../lib/keys.ts';
 import { navigate } from '../lib/router.ts';
 import {
-  chatDraft, chatDraftSource, editChatDraft, epoch, errorText, flash, pickPerson, personPicker, prependChatDraft, refreshPeople, requestFocus, restoreChatDraft, session, shellActive, useFocusRequest,
+  chatDraft, chatDraftSource, chatStash, editChatDraft, epoch, errorText, flash, pickPerson, personPicker, prependChatDraft, refreshPeople, requestFocus, restoreChatDraft, session, shellActive, takeChatStash, useFocusRequest,
 } from '../lib/store.ts';
 import {
-  answerForKey, createLandedFeed, createSendQueue, describeResult, filedPerson, filedTarget, formatTime, historyTexts, loadCaptures, openTarget,
-  optionLabel, prependPage, questionChoices, questionKeys, questionTarget, recallStep, upsertCapture,
+  answerForKey, createLandedFeed, createSendQueue, describeResult, downAction, filedPerson, filedTarget, formatTime, highlightKeys, historyTexts,
+  inputArrow, loadCaptures, openTarget, optionLabel, prependPage, questionChoices, questionKeys, questionTarget, recallNext, stepOption,
+  upsertCapture,
 } from './chat-logic.ts';
-import type { CaptureSource } from './chat-logic.ts';
+import type { CaptureSource, RecallPos } from './chat-logic.ts';
 
 // Unsent texts live at module level, so they survive the view unmounting on a 401 and go out in order
 // after re-login (the remounted Chat drains them). A status-0 retry may duplicate a capture the server
@@ -41,7 +42,9 @@ export default function Chat() {
   const input = useRef<HTMLInputElement>(null);
   const alive = useRef(true);
   const busy = useRef(false);
-  const recall = useRef<{ cursor: number; text: string } | null>(null);
+  const recall = useRef<RecallPos | null>(null);
+  // Answer option highlighted with ←/→ (Enter picks it). Tied to one capture; stale values are ignored.
+  const [hl, setHl] = useState<{ id: number; key: string } | null>(null);
   const capsRef = useRef(captures);
   capsRef.current = captures;
 
@@ -81,7 +84,14 @@ export default function Chat() {
 
   const selected = captures.find((c) => c.id === selId) ?? captures[captures.length - 1] ?? null;
   const target = questionTarget(captures, selected?.id ?? null);
+  // ←/→ and Enter-to-answer apply only while the selected capture itself holds the live question.
+  const liveSel = selected && target && target.id === selected.id && target.question ? target : null;
+  const optionKeys = liveSel?.question ? highlightKeys(liveSel.question) : [];
+  const hlKey = hl && liveSel && hl.id === liveSel.id && optionKeys.includes(hl.key) ? hl.key : null;
   const log = useRef<HTMLDivElement>(null);
+  // The highlight belongs to one live question on one selected capture: drop it when either changes.
+  const questionSig = liveSel?.question ? `${liveSel.id}:${optionKeys.join('')}` : '';
+  useLayoutEffect(() => { setHl(null); }, [selected?.id, questionSig]); // layout: must land before the next key
 
   // Keep the selected row in view (new captures become the selection, so the log follows the newest).
   useEffect(() => {
@@ -143,6 +153,7 @@ export default function Chat() {
     const source = chatDraftSource.peek();
     chatDraft.value = '';
     recall.current = null;
+    takeChatStash(); // text typed before a recall comes back after the send
     sendQueue.push(text, source);
     void drain();
   }
@@ -178,6 +189,7 @@ export default function Chat() {
 
   function pressOption(c: Capture, key: string): void {
     if (!c.question) return;
+    setHl(null);
     const a = answerForKey(c.question, key);
     if (!a) return;
     if (a.kind === 'pick') {
@@ -206,6 +218,22 @@ export default function Chat() {
     if (n) setSelId(n.id);
   }
 
+  /** ↓ on the newest capture hands the keyboard back to the input. */
+  function moveDown(): void {
+    const i = captures.findIndex((c) => c.id === selected?.id);
+    if (downAction(i, captures.length) === 'input') input.current?.focus(); else move(1);
+  }
+
+  function stepHighlight(dir: 'left' | 'right'): void {
+    if (!liveSel) return;
+    const k = stepOption(optionKeys, hlKey, dir);
+    if (k === null) return;
+    setHl({ id: liveSel.id, key: k });
+    // Purely visual highlight (no DOM focus): announce it through the status line's live region.
+    const label = liveSel.question ? questionChoices(liveSel.question).find((o) => o.key === k)?.label : undefined;
+    if (label) flash(`Answer: ${label}`);
+  }
+
   function open(): void {
     if (!selected) return;
     const t = openTarget(selected);
@@ -227,17 +255,17 @@ export default function Chat() {
   }
 
   const bindings: Record<string, KeyHandler> = {
-    j: () => move(1), down: () => move(1),
+    j: () => move(1), down: moveDown,
     k: () => move(-1), up: () => move(-1),
     'g g': () => { const f = captures[0]; if (f) setSelId(f.id); },
     'shift+g': () => { const l = captures[captures.length - 1]; if (l) setSelId(l.id); },
-    enter: open,
+    enter: () => { if (liveSel && hlKey !== null) pressOption(liveSel, hlKey); else open(); },
     u: undo, r: reclassify,
     ...(hasMore ? { o: () => { void older(); } } : {}),
   };
   const descriptions: Record<string, string> = {
     j: 'next capture', k: 'previous capture', 'g g': 'first capture', 'shift+g': 'newest capture',
-    down: 'next capture', up: 'previous capture', enter: 'open filed item', u: 'undo capture', r: 'reclassify capture', o: 'load older captures',
+    down: 'next capture (past the newest: back to the input)', up: 'previous capture', enter: 'open filed item / answer with the highlighted option', u: 'undo capture', r: 'reclassify capture', o: 'load older captures',
   };
   // The live question's option keys win over the fixed ones above.
   if (target?.question) {
@@ -247,20 +275,40 @@ export default function Chat() {
     }
   }
   useKeys(bindings, { descriptions });
+  useKeys({ left: () => stepHighlight('left'), right: () => stepHighlight('right') }, {
+    enabled: liveSel !== null,
+    descriptions: { left: 'previous answer option', right: 'next answer option' },
+  });
 
   const onKeyDown = (e: KeyboardEvent) => {
     if (composing(e)) return;
-    if (e.key === 'Enter') { e.preventDefault(); submit(); return; }
+    // Behind an overlay or during a voice recording the input must not act (it may still hold focus); in
+    // particular Enter belongs to the voice Send, never to sending the draft.
+    if (e.key === 'Enter') { e.preventDefault(); if (!modalOpen()) submit(); return; }
     if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-      const cur = chatDraft.peek();
-      // Recall only from an empty line or while stepping through recalled text, never over fresh typing.
-      if (cur !== '' && cur !== recall.current?.text) return;
+      // Behind an overlay or during a voice recording the input must not act (it may still hold focus).
+      if (modalOpen()) return;
+      const dir = e.key === 'ArrowUp' ? 'up' : 'down';
+      const draft = chatDraft.peek();
+      const act = inputArrow({
+        dir, ctrl: e.ctrlKey, shift: e.shiftKey, alt: e.altKey, meta: e.metaKey, draft, hasCaptures: capsRef.current.length > 0,
+      });
+      if (act === 'native') return;
       e.preventDefault();
-      const texts = historyTexts(capsRef.current);
-      const from = recall.current?.cursor ?? texts.length;
-      const step = recallStep(texts, from, e.key === 'ArrowUp' ? 'up' : 'down');
-      recall.current = step;
-      editChatDraft(step.text, true);
+      if (act === 'leave') {
+        // Back to NORMAL on the newest capture; a pending one makes its question live (chat focus rule).
+        const newest = capsRef.current[capsRef.current.length - 1];
+        if (newest) setSelId(newest.id);
+        input.current?.blur();
+        mode.value = 'normal';
+        return;
+      }
+      const next = recallNext(historyTexts(capsRef.current), recall.current, draft, chatDraftSource.peek(), chatStash.peek(), dir);
+      // The stash (your own typed text) stays until Alt-↓ restores it or a send brings it back. Edits to a
+      // recalled line are NOT protected: it is a copy of history, so they may be discarded by the next recall.
+      recall.current = next.pos;
+      chatStash.value = next.stash;
+      restoreChatDraft(next.text, next.source);
     }
   };
 
@@ -290,10 +338,14 @@ export default function Chat() {
                 )}
                 {live && c.question && (
                   <div>
-                    <div class="hint">Esc, then press a key to answer</div>
+                    <div class="hint">Esc, then press a key (or ←/→ and Enter) to answer</div>
                     {questionChoices(c.question).map((o) => (
-                      <button key={o.key} type="button" class="tbtn" onClick={(ev) => { ev.stopPropagation(); pressOption(c, o.key); }}>
-                        {optionLabel(o)}
+                      <button
+                        key={o.key} type="button" class={`tbtn${hlKey === o.key ? ' highlight' : ''}`}
+                        aria-current={hlKey === o.key ? 'true' : undefined}
+                        onClick={(ev) => { ev.stopPropagation(); pressOption(c, o.key); }}
+                      >
+                        <span class="row-marker" aria-hidden="true">{hlKey === o.key ? '>' : ' '}</span>{optionLabel(o)}
                       </button>
                     ))}
                   </div>
@@ -308,13 +360,15 @@ export default function Chat() {
         <input
           ref={input} class="textedit" type="text" value={chatDraft.value} spellcheck={false} autocomplete="off"
           maxLength={LIMITS.captureText} placeholder="note, thought or action…" aria-label="Chat input"
-          onInput={(e) => { editChatDraft((e.target as HTMLInputElement).value); }}
+          onInput={(e) => {
+            editChatDraft((e.target as HTMLInputElement).value);
+          }}
           onKeyDown={onKeyDown}
         />
         <button type="button" class="tbtn" onClick={submit} aria-label="Send">⏎</button>
       </div>
       <div class="hint">
-        /note /todo /wait /agenda · @person · Enter send · Esc normal mode · ↑ recall · j/k select · u undo · r reclassify
+        /note /todo /wait /agenda · @person · Enter send · Esc normal mode · Alt-↑/↓ recall · ↑ select newest · j/k ↑/↓ select · u undo · r reclassify
       </div>
     </Pane>
   );

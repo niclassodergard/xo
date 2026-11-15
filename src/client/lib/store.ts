@@ -4,7 +4,7 @@ import { useLayoutEffect } from 'preact/hooks';
 import type { Capture, Person } from '../../shared/types.ts';
 import type { CapturesListResponse, PeopleListResponse, SessionResponse } from '../../shared/api.ts';
 import { api, ApiError } from './api.ts';
-import { isTextEntry, mode } from './keys.ts';
+import { mode } from './keys.ts';
 import { navigate } from './router.ts';
 
 /*
@@ -77,6 +77,20 @@ export function prependChatDraft(text: string, source: 'text' | 'voice'): void {
   const voice = chatVoiceChars.peek() + (source === 'voice' ? text.length : 0);
   chatDraft.value = next;
   chatVoiceChars.value = Math.min(voice, next.length);
+}
+/**
+ * Text typed before history recall (Alt-up) replaced it, with its source. Module level, so it survives a
+ * remount and a 401 like the draft itself; wiped on logout. It stays until Alt-down steps past the newest
+ * entry (restoring it) or the user clears the input, and is put back after a send (see takeChatStash).
+ */
+export const chatStash: Signal<{ text: string; source: 'text' | 'voice' } | null> = signal<{ text: string; source: 'text' | 'voice' } | null>(null);
+/** Put the stashed text back into the (now empty) input, keeping its source. Returns whether there was one. */
+export function takeChatStash(): boolean {
+  const st = chatStash.peek();
+  if (!st) return false;
+  chatStash.value = null;
+  restoreChatDraft(st.text, st.source);
+  return true;
 }
 /** Search input text; kept in client state so it never lands in the URL. */
 export const searchQuery: Signal<string> = signal('');
@@ -233,6 +247,7 @@ function endLocally(): void {
   session.value = null;
   shellActive.value = false;
   chatDraft.value = '';
+  chatStash.value = null;
   searchQuery.value = '';
   drafts.value = {};
   navigate('/chat', { replace: true });
@@ -275,8 +290,6 @@ export async function undoLastCapture(): Promise<void> {
 
 // ---- overlay controls ---------------------------------------------------------------------
 
-let returnFocus: HTMLElement | null = null;
-
 /**
  * Ctrl-K / ':' do nothing while a Prompt or person picker is open. Closing them first would throw away
  * what the user is typing, and stacking the palette behind them would send keystrokes to an invisible
@@ -284,7 +297,6 @@ let returnFocus: HTMLElement | null = null;
  */
 export function openPalette(): void {
   if (overlay.value === 'palette' || personPicker.value || promptRequest.value) return;
-  returnFocus = typeof document !== 'undefined' && document.activeElement instanceof HTMLElement ? document.activeElement : null;
   overlay.value = 'palette';
   mode.value = 'command';
 }
@@ -301,12 +313,7 @@ export function toggleHelp(): void {
 export function closeOverlay(): void {
   const wasPalette = overlay.value === 'palette';
   overlay.value = null;
-  if (wasPalette) {
-    mode.value = 'normal';
-    const el = returnFocus;
-    returnFocus = null;
-    if (el && el.isConnected && isTextEntry(el)) el.focus();
-  }
+  if (wasPalette) mode.value = 'normal'; // focus goes back to where it was in components/Overlay.tsx
 }
 
 export function pickPerson(onPick: (p: Person) => void): void {

@@ -25,6 +25,7 @@ import Notes from './views/Notes.tsx';
 import People from './views/People.tsx';
 import PersonView from './views/Person.tsx';
 import Search from './views/Search.tsx';
+import { cycleView } from './views/nav-logic.ts';
 import { initVoice } from './voice/index.ts';
 
 const VIEWS: Record<string, ComponentType> = {
@@ -79,11 +80,14 @@ function GlobalKeys(props: { enabled: boolean }) {
     '/': () => { navigate('/search'); focusSearchInput(); },
     ':': togglePalette,
     '?': toggleHelp,
+    left: () => navigate(cycleView(NAV, route.peek().name, -1)),
+    right: () => navigate(cycleView(NAV, route.peek().name, 1)),
   }, {
     scope: 'global', enabled,
     descriptions: {
       'g c': 'go to chat', 'g a': 'go to actions', 'g n': 'go to notes', 'g p': 'go to people',
       i: 'chat input', '/': 'search', ':': 'command palette', '?': 'help',
+      left: 'previous view (Chat · Actions · Notes · People)', right: 'next view (Chat · Actions · Notes · People)',
     },
   });
   useKeys({

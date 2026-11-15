@@ -167,7 +167,7 @@ docker exec xo rm -rf /tmp/xo-export
 Press `?` for the help overlay, which lists the bindings of the current view (it is generated from the registered bindings and is authoritative). Modes, shown at the left of the status line:
 
 - **NORMAL**: keys are commands.
-- **INSERT**: you are typing in an input; only `Esc`, `Ctrl-K` and `Alt+Space` act as commands. `Esc` returns to NORMAL.
+- **INSERT**: you are typing in an input; only `Esc`, `Ctrl-K` and `Alt+Space` act as commands. `Esc` returns to NORMAL. The one exception is the chat input's own keys (`Enter` sends, `↑` in an empty input leaves it, `Alt-↑` / `Alt-↓` recall), which are not in the `?` overlay's generated lists (the overlay shows them in a fixed "Chat input" section).
 - **COMMAND**: the palette or another overlay is open.
 
 Everything is reachable by keyboard; the same actions also work by mouse or touch (list rows and buttons).
@@ -177,13 +177,14 @@ Everything is reachable by keyboard; the same actions also work by mouse or touc
 | Key | Action |
 |---|---|
 | `g c` / `g a` / `g n` / `g p` | Go to chat / actions / notes / people |
+| `←` / `→` | Previous / next view in the order Chat, Actions, Notes, People (wraps; a note counts as Notes, a person or 1-1 as People). Person and 1-1 use them for panes instead, and Chat uses them for answer options while a question is live (see below) |
 | `i` | Go to chat and focus the input |
 | `/` | Search |
 | `:` | Command palette |
 | `Ctrl-K` (any mode) | Command palette |
 | `?` | Help overlay |
 | `u` | Not global. Chat: undo the selected, filed capture. Person: undo the last done/drop shown by its undo offer. Elsewhere it does nothing. The palette command "Undo last capture" undoes the most recent filed capture from any view |
-| `j` / `k` (or arrows), `g g`, `Shift+G`, `Enter` | In lists: move, top, bottom, open |
+| `j` / `k` or `↑` / `↓`, `g g`, `Shift+G`, `Enter` | In lists: move, top, bottom, open |
 | `Esc` | Close overlay, leave the input (to NORMAL), or go back |
 | hold `Space` | Push-to-talk (see Voice) |
 | `Alt+Space` (any mode) | Push-to-talk |
@@ -192,14 +193,15 @@ The palette (`:`) also has: go to each view, "Start 1-1 with…" (person picker)
 
 ### Chat
 
-Chat is the home view and always opens with the input focused (INSERT). `Enter` sends, `Up`/`Down` recall earlier texts, `Esc` leaves the input.
+Chat is the home view and always opens with the input focused (INSERT). `Enter` sends, `Alt-↑` / `Alt-↓` (Option on macOS; Ctrl-↑/↓ is taken by Mission Control) recall earlier texts (empty or not). Text you had typed is kept aside and comes back when you step down past the newest, after you send a recalled line, or after leaving and re-entering Chat (clearing the input does not drop it). Edits you make to a *recalled* line are not protected: it is a copy of an earlier text, and the next recall may replace it. `Esc` leaves the input. Plain `↑` in an **empty** input also leaves it and selects the newest capture (NORMAL mode); in a non-empty input `↑`/`↓` move the caret as usual.
 
 **Focus rule for questions.** When XO asks a question (what kind is this, unknown person, which person, which person for an agenda item), the input keeps focus so typing is never swallowed. To answer, press `Esc` first (NORMAL mode), then the option key shown on the question (`n` note, `t` action, `a` agenda, `d` discard, `c` create person, `p` pick a person, `s` skip, `1`..`9` for candidates). After an answer, focus returns to the input, unless the same capture asks a follow-up question. Pressing option keys while still in the input just types them.
 
 | Key | Action |
 |---|---|
-| `j` / `k`, `g g`, `Shift+G` | Select a capture / first / newest |
-| `Enter` | Open the filed item (note, person, or the actions list) |
+| `j` / `k` (or `↓` / `↑`), `g g`, `Shift+G` | Select a capture / first / newest. `↓` on the newest capture returns to the input |
+| `←` / `→` | While the selected capture has a live question: highlight (`>` marker; the status line reads it out) the previous / next answer option (candidates first, then options); `Enter` answers. Otherwise they switch view |
+| `Enter` | Answer with the highlighted option, or else open the filed item (note, person, or the actions list) |
 | `u` / `r` | Undo / reclassify the selected, filed capture |
 | `o` | Load older captures (when offered) |
 
@@ -212,8 +214,8 @@ Chat is the home view and always opens with the input focused (INSERT). `Enter` 
 | Note | `e` edit body, `t` edit title, `Esc` save and leave the field, `Ctrl-Enter` save, `p` open the person, `d d` delete, `q` back |
 | People | `Enter` open, `a` add person, `s` start 1-1 |
 | Search | The input is focused on entry; type at least 2 characters, `Enter` searches and moves to the results, then `j`/`k` and `Enter` open a hit; `Esc` leaves the input |
-| Person | `Tab` / `Shift+Tab` panes, `a` add agenda item, `x` done / `Shift+X` drop an agenda item (undo with `u`), `x` complete an action (in the actions pane), `s` start or resume a 1-1, `e` edit name and aliases, `n` edit person notes, `m` load older notes or meetings, `d d` delete an agenda item, `Enter` open a note or past meeting |
-| 1-1 meeting | `j` / `k` move, `x` check or uncheck an agenda item or follow-up, `a` add agenda item, `t` follow-up for me, `Shift+T` follow-up for them, `n` edit the meeting notes (autosaved every few seconds, and on `Esc` or blur), `Tab` / `Shift+Tab` panes, `d d` delete, `Shift+E` end the meeting (confirm with `y`, cancel with `n` or `Esc`), `Esc` back to the person. An ended meeting is read-only. |
+| Person | `Tab` / `Shift+Tab` or `←` / `→` panes, `a` add agenda item, `x` done / `Shift+X` drop an agenda item (undo with `u`), `x` complete an action (in the actions pane), `s` start or resume a 1-1, `e` edit name and aliases, `n` edit person notes, `m` load older notes or meetings, `d d` delete an agenda item, `Enter` open a note or past meeting |
+| 1-1 meeting | `j` / `k` move, `x` check or uncheck an agenda item or follow-up, `a` add agenda item, `t` follow-up for me, `Shift+T` follow-up for them, `n` edit the meeting notes (autosaved every few seconds, and on `Esc` or blur), `Tab` / `Shift+Tab` or `←` / `→` panes, `d d` delete, `Shift+E` end the meeting (confirm with `y`, cancel with `n` or `Esc`), `Esc` back to the person. An ended meeting is read-only. |
 
 Unchecked agenda items stay open and appear in the next 1-1 together with the previous meeting's notes, resolved items and follow-ups.
 

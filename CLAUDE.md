@@ -38,6 +38,27 @@ added, and — always — when a mistake is made (see "Lessons learned" below).
 - **Outstanding manual checks:** `docker build` and run (Docker was not installed; Dockerfile unverified), real OpenRouter classification and transcription (needs the user's OK), push-to-talk on real Chrome/Safari desktop and iOS (incl. the Send/Discard prompt on a real phone), real authenticator app, `tailscale serve` header behaviour (README checklist), audio ZDR enforcement at OpenRouter.
 - Update this section as milestones land.
 
+## Production (user's tailnet instance)
+
+- Runs from a **separate git worktree** at a reviewed commit: `~/.xo/app`
+  (never from this checkout — dev builds replace `dist/`). Config:
+  `~/.xo/xo.env` (0600, outside the repo); DB: `~/.xo/xo.db`.
+- Listens on `127.0.0.1:3100`; exposed tailnet-only via
+  `tailscale serve --bg --https=8444 http://127.0.0.1:3100` →
+  `https://mini.tail795763.ts.net:8444`. Other `serve` entries on this Mac
+  (443, 8443, Funnel on 10000) belong to other apps — never touch them.
+  Port 3000 is another app.
+- Real OpenRouter, ZDR off (user decision). Forged-XFF check passed:
+  `XO_TRUST_PROXY=1` is correct behind `tailscale serve`.
+- **Deploy** (only after a clean review and a commit):
+  `git -C ~/.xo/app checkout --detach <commit>`, then in `~/.xo/app`:
+  `pnpm install --frozen-lockfile --offline && pnpm build`, restart the server
+  (`node --env-file=$HOME/.xo/xo.env src/server/main.ts` from `~/.xo/app`),
+  then verify the served page's JS asset returns 200 over the tailnet URL.
+  Sessions live in the DB, so a restart doesn't log the user out.
+- The server currently runs as a background process of the Claude session; it
+  stops when the session ends (no launchd service yet).
+
 ## Settled decisions (v0.1, interview of 2026-11-15)
 
 | Area | Decision |
@@ -326,6 +347,36 @@ pointed out by the user.
   own Esc listener couldn't stop the global Esc, so cancelling a recording also
   navigated back. **Rule:** feature keys are bindings in the key engine with the
   right scope; test that the global binding doesn't also fire.
+- **2026-11-15 — Production ran from the dev checkout and broke.** I started the
+  user's tailnet XO from the repo itself; later `pnpm build`/`pnpm e2e` runs
+  replaced `dist/client`, so the running server served a page whose script
+  404'd. **Rule:** production runs from a separate git worktree at a reviewed
+  commit (`~/.xo/app`), never from the working checkout. Deploy = update that
+  worktree to the new commit, `pnpm install --frozen-lockfile --offline`,
+  `pnpm build`, restart. Verify the served page's asset returns 200.
+- **2026-11-15 — An advertised key did something else.** The voice prompt said
+  "Send (Enter)", but with the chat input focused Enter submitted the chat draft
+  instead. **Rule:** every field `onKeyDown` that acts on a key (Enter too, not
+  only arrows) checks `modalOpen()` first, and any key a prompt advertises must
+  work in every mode the prompt can appear in — test it from INSERT as well.
+- **2026-11-15 — Roving focus turned Enter into a native click.** Focusing the
+  highlighted answer button meant Enter/Space were handled by the browser, not
+  the key engine, so Enter answered a question the user had moved away from.
+  **Rule:** keyboard highlights in XO are visual plus a live-region
+  announcement; actions go through the engine and re-check the target. Every
+  overlay returns focus to the element that had it when it opened.
+- **2026-11-15 — Field-level key handlers bypassed the modal check.** The chat
+  input's own `onKeyDown` acted on arrows behind Help and during a voice
+  recording, and a recall stash in component state lost typed text on remount.
+  **Rule:** field handlers check that no modal layer is open; every overlay
+  takes focus even without focusable children; any "never lose typed text"
+  state lives in the store next to the draft.
+- **2026-11-15 — Key choices must survive the user's OS.** I specified
+  Ctrl-↑/↓ for chat history recall; macOS takes those for Mission Control, so it
+  would never reach the browser. **Rule:** the user is on macOS — before
+  assigning a shortcut, check it isn't taken by macOS or the browser (Ctrl-↑/↓/←/→,
+  Cmd-anything, Ctrl-Space, Ctrl-Tab). Arrows typed in a text field never reach the
+  key engine; field-level behaviour lives in the field's own `onKeyDown`.
 - **2026-11-15 — A security sweep can pass vacuously.** The "every route needs
   auth" test checked the 401 response but not *which* route answered, so a probe
   path that missed its route passed via the not-found fallback, and a new root

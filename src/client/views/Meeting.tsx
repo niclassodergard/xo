@@ -170,6 +170,8 @@ export default function Meeting() {
     {
       tab: () => setPane((p) => cyclePane(p, PANE_COUNT, 1)),
       'shift+tab': () => setPane((p) => cyclePane(p, PANE_COUNT, -1)),
+      left: () => setPane((p) => cyclePane(p, PANE_COUNT, -1)),
+      right: () => setPane((p) => cyclePane(p, PANE_COUNT, 1)),
       // Replace this entry (not push) so the next Esc leaves the person instead of coming back here.
       esc: () => navigate(`/people/${personId}`, { replace: true }),
       // Nothing in a meeting is undone with `u`; say so instead of doing nothing.
@@ -187,12 +189,14 @@ export default function Meeting() {
     {
       enabled: view !== null && !confirmEnd,
       descriptions: {
-        tab: 'next pane', 'shift+tab': 'previous pane', esc: 'back to the person', u: 'no undo here (x unchecks)',
+        tab: 'next pane', 'shift+tab': 'previous pane', right: 'next pane', left: 'previous pane', esc: 'back to the person', u: 'no undo here (x unchecks)',
         a: 'add agenda item', t: 'add follow-up (me)', 'shift+t': 'add follow-up (them)', n: 'edit notes', 'shift+e': 'end meeting',
       },
     },
   );
   useKeys({ r: () => { void load(); } }, { enabled: view === null && error !== null });
+  // While loading or after an error ←/→ do nothing here, rather than switching the view.
+  useKeys({ left: () => undefined, right: () => undefined }, { enabled: view === null });
 
   if (!view) {
     return <Pane title="1-1">{error ? <div>{error}<div class="hint">r to retry, Esc to go back</div></div> : <div class="dim">Loading…</div>}</Pane>;

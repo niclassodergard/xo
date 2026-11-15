@@ -84,6 +84,8 @@ h2, h3 { margin: 0; font-size: inherit; font-weight: normal; }
 
 .tbtn { background: transparent; border: 1px solid var(--border); border-radius: 0; padding: 0 1.2ch; cursor: pointer; min-height: 1.8em; }
 .tbtn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.tbtn .row-marker { margin-right: 0.5ch; }
+.tbtn.highlight { font-weight: bold; border-color: var(--accent); color: var(--accent); background: var(--select); }
 .tbtn:disabled { color: var(--dim); cursor: default; }
 
 .overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.6); display: flex; justify-content: center; align-items: flex-start; padding-top: 12vh; z-index: 10; }

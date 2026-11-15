@@ -241,6 +241,218 @@ test('search finds the note, help overlay opens', async () => {
   await expect(help).toBeHidden();
 });
 
+test('arrow keys: view cycle, panes, answer options, capture selection, history recall', async () => {
+  const focusedPane = () => page.locator('main .pane.focused .pane-title');
+
+  // In a text field arrows are the caret's: nothing navigates.
+  await page.keyboard.press('g');
+  await page.keyboard.press('c');
+  await expect(chatInput()).toBeFocused();
+  await expect(selectedRow()).toContainText('Anna hiring plan'); // loaded
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('ArrowLeft');
+  await expect(page).toHaveURL(/#\/chat$/);
+
+  // Global: step through Chat, Actions, Notes, People, wrapping.
+  await normalMode();
+  await page.keyboard.press('ArrowRight');
+  await expect(page).toHaveURL(/#\/actions$/);
+  await page.keyboard.press('ArrowRight');
+  await expect(page).toHaveURL(/#\/notes$/);
+  await page.keyboard.press('ArrowRight');
+  await expect(page).toHaveURL(/#\/people$/);
+  await page.keyboard.press('ArrowLeft');
+  await expect(page).toHaveURL(/#\/notes$/);
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('ArrowRight'); // wraps to Chat
+  await expect(page).toHaveURL(/#\/chat$/);
+  await expect(chatInput()).toBeFocused();
+  await normalMode();
+  await page.keyboard.press('ArrowLeft'); // wraps to People
+  await expect(page).toHaveURL(/#\/people$/);
+
+  // Person and 1-1: previous/next pane instead of the view switch.
+  await page.keyboard.press('Enter');
+  await expect(page).toHaveURL(/#\/people\/\d+$/);
+  await expect(page.locator('main')).toContainText('Past meetings'); // loaded
+  await expect(focusedPane()).toContainText('Agenda');
+  await page.keyboard.press('ArrowRight');
+  await expect(focusedPane()).toContainText('Open actions');
+  await page.keyboard.press('ArrowLeft');
+  await expect(focusedPane()).toContainText('Agenda');
+  await page.keyboard.press('s');
+  await expect(page).toHaveURL(/#\/meetings\/\d+$/);
+  await expect(page.locator('main')).toContainText('In progress');
+  await expect(focusedPane()).toContainText('Agenda');
+  await page.keyboard.press('ArrowRight');
+  await expect(focusedPane()).toContainText('Follow-ups');
+  await page.keyboard.press('ArrowLeft');
+  await expect(focusedPane()).toContainText('Agenda');
+  await expect(page).toHaveURL(/#\/meetings\/\d+$/);
+
+  // Chat: history recall is Alt-Up/Down; plain Up in an empty input selects the newest capture.
+  await page.keyboard.press('g');
+  await page.keyboard.press('c');
+  await expect(chatInput()).toBeFocused();
+  await expect(selectedRow()).toContainText('Anna hiring plan');
+  await page.keyboard.type('abc');
+  await page.keyboard.press('ArrowUp'); // non-empty: native caret, no mode change, no recall
+  await expect(chatInput()).toBeFocused();
+  await expect(chatInput()).toHaveValue('abc');
+  await page.keyboard.press('Alt+ArrowUp'); // recall works over typed text...
+  await expect(chatInput()).toHaveValue('/agenda @Anna hiring plan');
+  await page.keyboard.press('Alt+ArrowUp');
+  await expect(chatInput()).toHaveValue('/note lunch with @Zed');
+  await page.keyboard.press('Alt+ArrowDown');
+  await page.keyboard.press('Alt+ArrowDown'); // ...and typed text comes back
+  await expect(chatInput()).toHaveValue('abc');
+  await page.fill('[aria-label="Chat input"]', '');
+  await page.keyboard.press('Alt+ArrowUp'); // recall from an empty input too
+  await expect(chatInput()).toHaveValue('/agenda @Anna hiring plan');
+  await page.fill('[aria-label="Chat input"]', '');
+
+  await page.keyboard.press('ArrowUp'); // empty input: leave it, select the newest capture
+  await expect(mode()).toHaveText('NORMAL');
+  await expect(chatInput()).not.toBeFocused();
+  await expect(selectedRow()).toContainText('Anna hiring plan');
+  await page.keyboard.press('ArrowUp');
+  await expect(selectedRow()).toContainText('Zed');
+  await page.keyboard.press('ArrowDown');
+  await expect(selectedRow()).toContainText('Anna hiring plan');
+  await page.keyboard.press('ArrowDown'); // past the newest: back to the input
+  await expect(chatInput()).toBeFocused();
+  await expect(mode()).toHaveText('INSERT');
+
+  // Selecting a pending capture makes its question live.
+  await submit('first thing?? maybe');
+  await expect(selectedRow()).toContainText('first thing?? maybe');
+  await submit('second thing?? maybe');
+  await expect(selectedRow()).toContainText('second thing?? maybe');
+  await page.keyboard.press('ArrowUp');
+  await expect(selectedRow()).toContainText('second thing?? maybe');
+  await page.keyboard.press('ArrowUp');
+  await expect(selectedRow()).toContainText('first thing?? maybe');
+  await expect(selectedRow()).toContainText('Esc, then press a key'); // live on the selected capture
+
+  // Answer options: Left/Right highlight, Enter picks; nothing changes the view.
+  const highlighted = () => page.locator('[role=log] button.tbtn[aria-current=true]');
+  await expect(highlighted()).toHaveCount(0);
+  await page.keyboard.press('ArrowRight');
+  await expect(highlighted()).toHaveCount(1);
+  await expect(highlighted()).toContainText('[n]');
+  await page.keyboard.press('ArrowRight');
+  await expect(highlighted()).toContainText('[t]');
+  await page.keyboard.press('ArrowLeft');
+  await expect(highlighted()).toContainText('[n]');
+  await expect(page).toHaveURL(/#\/chat$/);
+  await page.keyboard.press('Enter');
+  await expect(selectedRow()).toContainText('→ Note');
+  await expect(selectedRow()).toContainText('first thing?? maybe');
+  await expect(chatInput()).toBeFocused();
+
+  // The highlight is visual only: after k onto a filed capture, Enter opens that item and answers nothing.
+  const answers: string[] = [];
+  const onReq = (r: { method(): string; url(): string }) => { if (r.method() === 'POST' && /\/answer$/.test(r.url())) answers.push(r.url()); };
+  page.on('request', onReq);
+  await normalMode();
+  await page.keyboard.press('ArrowDown'); // from the answered first capture to the pending second one
+  await expect(selectedRow()).toContainText('second thing?? maybe');
+  await page.keyboard.press('ArrowRight');
+  await expect(highlighted()).toContainText('[n]');
+  await expect(page.locator('.statusbar [role=status]')).toContainText('Answer: Note'); // announced
+  await page.keyboard.press('k'); // onto the filed capture (the first one, now a note)
+  await expect(selectedRow()).toContainText('first thing?? maybe');
+  await expect(highlighted()).toHaveCount(0);
+  await page.keyboard.press('Enter');
+  await expect(page).toHaveURL(/#\/notes\/\d+$/);
+  expect(answers, 'Enter on a filed capture must not answer the other question').toEqual([]);
+  await page.keyboard.press('g');
+  await page.keyboard.press('c');
+  await expect(chatInput()).toBeFocused();
+  await expect(selectedRow()).toContainText('second thing?? maybe');
+  await normalMode();
+  await page.keyboard.press('d'); // letters keep working
+  await expect(selectedRow()).toContainText('discarded');
+  await expect(chatInput()).toBeFocused();
+  page.off('request', onReq);
+
+  // A pending question and an overlay opened from the input: closing the overlay gives the input back, so
+  // stray typing is text, not an answer.
+  await submit('third thing?? maybe');
+  await expect(selectedRow()).toContainText('What is this?');
+  const answers2: string[] = [];
+  const onReq2 = (r: { method(): string; url(): string }) => { if (r.method() === 'POST' && /\/answer$/.test(r.url())) answers2.push(r.url()); };
+  page.on('request', onReq2);
+  await page.keyboard.type('draft text');
+  await page.keyboard.press('Control+k');
+  await typeInOverlay('help');
+  const help = page.getByRole('dialog', { name: 'Help' });
+  await expect(help).toBeVisible();
+  await expect(help).toContainText('Chat input');
+  await expect(help).toBeFocused(); // no focusable child: the box itself holds focus
+  const modeBefore = await mode().innerText();
+  await page.keyboard.press('ArrowUp');
+  await page.keyboard.press('Alt+ArrowUp');
+  await page.keyboard.type('xyz'); // letters do not reach the hidden input either
+  await expect(chatInput()).toHaveValue('draft text');
+  await expect(mode()).toHaveText(modeBefore);
+  await page.keyboard.press('Escape');
+  await expect(help).toBeHidden();
+  await expect(chatInput()).toBeFocused();
+  await expect(mode()).toHaveText('INSERT');
+  await page.keyboard.type('n');
+  await expect(chatInput()).toHaveValue('draft textn');
+  await page.fill('[aria-label="Chat input"]', '');
+  await page.keyboard.press('Control+k');
+  await typeInOverlay('start 1-1'); // palette -> person picker
+  await expect(page.getByRole('dialog', { name: 'Pick person' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(chatInput()).toBeFocused();
+  await page.keyboard.type('n');
+  await expect(chatInput()).toHaveValue('n');
+  await page.fill('[aria-label="Chat input"]', '');
+  expect(answers2, 'typing after an overlay must not answer the pending question').toEqual([]);
+  page.off('request', onReq2);
+  await normalMode();
+  await page.keyboard.press('d'); // discard the third question
+  await expect(selectedRow()).toContainText('discarded');
+  await expect(chatInput()).toBeFocused();
+
+  // Recall keeps what was typed: resend after a recall, leave Chat mid-recall, edit a recalled line.
+  await submit('/todo resend me');
+  await expect(selectedRow()).toContainText('resend me');
+  await page.keyboard.type('keep me');
+  await page.keyboard.press('Alt+ArrowUp');
+  await expect(chatInput()).toHaveValue('/todo resend me');
+  await page.keyboard.press('Enter'); // sends the recalled line; the typed text comes back
+  await expect(chatInput()).toHaveValue('keep me');
+  await page.keyboard.press('Alt+ArrowUp');
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('g');
+  await page.keyboard.press('a');
+  await expect(page).toHaveURL(/#\/actions$/);
+  await page.keyboard.press('g');
+  await page.keyboard.press('c');
+  await expect(selectedRow()).toContainText('resend me'); // history loaded
+  await expect(chatInput()).toHaveValue('/todo resend me'); // draft survived the remount
+  await page.keyboard.press('Alt+ArrowDown'); // stash survived too
+  await expect(chatInput()).toHaveValue('keep me');
+  await page.keyboard.press('Alt+ArrowUp');
+  await expect(chatInput()).toHaveValue('/todo resend me');
+  await page.keyboard.type('!'); // editing the recalled line
+  await expect(chatInput()).toHaveValue('/todo resend me!');
+  await page.keyboard.press('Alt+ArrowUp');
+  await expect(chatInput()).toHaveValue('/todo resend me');
+  await page.keyboard.press('Alt+ArrowDown');
+  await expect(chatInput()).toHaveValue('keep me'); // the stash was not overwritten by the edit
+  await page.fill('[aria-label="Chat input"]', '');
+
+  // No live question: Left/Right fall through to the view switch.
+  await normalMode();
+  await page.keyboard.press('ArrowRight');
+  await expect(page).toHaveURL(/#\/actions$/);
+});
+
 test('a 401 while typing keeps the draft and it is saved after logging in again', async () => {
   // The person's active 1-1 (started above) is where we type.
   await page.keyboard.press('g');
@@ -324,6 +536,54 @@ test('phone width (390px): chat fits, voice Send/Discard prompt is fully visible
   await page.waitForTimeout(500);
   expect(voiceRequests, 'a discarded recording must never be uploaded').toEqual([]);
   await page.setViewportSize({ width: 1200, height: 800 });
+});
+
+test('voice Send/Discard prompt with a chat draft: Enter sends the recording, not the draft', async () => {
+  await normalMode(); // NORMAL on Chat (the previous test ended here)
+  await page.keyboard.press('i');
+  await expect(chatInput()).toBeFocused();
+  const captureCalls: string[] = [];
+  const voiceBefore = voiceRequests.length;
+  const onReq = (r: { method(): string; url(): string }) => { if (r.method() === 'POST' && /\/api\/captures$/.test(r.url())) captureCalls.push(r.url()); };
+  page.on('request', onReq);
+  const prompt = page.locator('.statusbar [role=alert]');
+  const startAndPassLimit = async (): Promise<void> => {
+    await page.keyboard.type('my draft');
+    await page.keyboard.press('Control+k');
+    await typeInOverlay('dictate');
+    await expect(chatInput()).toBeFocused(); // the palette gave focus back
+    await expect(page.locator('.statusbar')).toContainText('REC');
+    await page.clock.fastForward(121_000);
+    await expect(prompt).toContainText('Recording reached 2 min');
+    await expect(chatInput()).not.toBeFocused(); // blurred, so Enter/Esc reach the voice layer
+    await expect(mode()).toHaveText('NORMAL');
+  };
+
+  // Enter = Send: one transcription upload, no capture, draft intact.
+  await startAndPassLimit();
+  await page.keyboard.press('Enter');
+  await expect(prompt).toHaveCount(0);
+  await expect.poll(() => voiceRequests.length - voiceBefore).toBe(1);
+  // The fake transcriber says "open Anna": a voice command, so the app leaves Chat. Come back; the draft is intact.
+  await expect(page).toHaveURL(/#\/people\/\d+$/);
+  expect(captureCalls, 'Enter at the prompt must not send the chat draft').toEqual([]);
+  await page.keyboard.press('g');
+  await page.keyboard.press('c');
+  await expect(chatInput()).toBeFocused();
+  await expect(chatInput()).toHaveValue('my draft');
+  await page.fill('[aria-label="Chat input"]', '');
+
+  // Esc = Discard: nothing uploaded, no capture, draft intact, input focused again.
+  await startAndPassLimit();
+  await page.keyboard.press('Escape');
+  await expect(prompt).toHaveCount(0);
+  await expect(chatInput()).toBeFocused();
+  await expect(chatInput()).toHaveValue('my draft');
+  await page.waitForTimeout(300);
+  expect(voiceRequests.length - voiceBefore, 'discard uploads nothing more').toBe(1);
+  expect(captureCalls).toEqual([]);
+  page.off('request', onReq);
+  await page.fill('[aria-label="Chat input"]', '');
 });
 
 test('log out with the palette, and nothing needed the mouse', async () => {

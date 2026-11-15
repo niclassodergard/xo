@@ -279,3 +279,17 @@ describe('IME and pending prefix', () => {
   });
 });
 
+
+describe('modalOpen', () => {
+  it('is true exactly while a modal layer exists (any mode set), not for other scopes', () => {
+    const { engine } = setup();
+    expect(engine.modalOpen()).toBe(false);
+    const g = engine.addLayer({ scope: 'global', modes: ['normal'], bindings: [] });
+    expect(engine.modalOpen()).toBe(false);
+    const m = engine.addLayer({ scope: 'modal', modes: ['normal'], bindings: [] });
+    expect(engine.modalOpen()).toBe(true);
+    m();
+    expect(engine.modalOpen()).toBe(false);
+    g();
+  });
+});

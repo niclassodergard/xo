@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  appPhase, appendVoiceDraft, chatDraft, chatDraftSource, editChatDraft, prependChatDraft, restoreChatDraft, clearDraft, drafts, epoch, flashMessage, logout, overlay, people, personPicker, promptRequest,
+  appPhase, appendVoiceDraft, chatDraft, chatStash, takeChatStash, chatDraftSource, editChatDraft, prependChatDraft, restoreChatDraft, clearDraft, drafts, epoch, flashMessage, logout, overlay, people, personPicker, promptRequest,
   refreshPeople, searchQuery, session, setDraft, shellActive, syncDraft, togglePalette,
 } from './store.ts';
 import { mode } from './keys.ts';
@@ -26,6 +26,13 @@ describe('logout', () => {
     expect(shellActive.value).toBe(false);
     expect(chatDraft.value).toBe('');
     expect(searchQuery.value).toBe('');
+  });
+
+  it('logout wipes the recall stash too', async () => {
+    chatStash.value = { text: 'typed before recall', source: 'text' };
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 204 })));
+    await logout();
+    expect(chatStash.value).toBeNull();
   });
 
   it('401 counts as logged out', async () => {
@@ -220,5 +227,28 @@ describe('prependChatDraft', () => {
     editChatDraft('new typed');
     prependChatDraft('typed old', 'text');
     expect(chatDraftSource.value).toBe('text');
+  });
+});
+
+describe('takeChatStash', () => {
+  afterEach(() => { chatStash.value = null; });
+  it('puts the stash back after a send, keeping its source, and clears it', () => {
+    chatDraft.value = '';
+    chatStash.value = { text: 'call Anna', source: 'voice' };
+    expect(takeChatStash()).toBe(true);
+    expect(chatDraft.value).toBe('call Anna');
+    expect(chatDraftSource.value).toBe('voice');
+    expect(chatStash.value).toBeNull();
+  });
+  it('a text stash stays text', () => {
+    chatDraft.value = '';
+    chatStash.value = { text: 'hello', source: 'text' };
+    takeChatStash();
+    expect(chatDraftSource.value).toBe('text');
+  });
+  it('does nothing without a stash', () => {
+    chatDraft.value = '';
+    expect(takeChatStash()).toBe(false);
+    expect(chatDraft.value).toBe('');
   });
 });

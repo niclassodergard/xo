@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { SearchHit } from '../../shared/api.ts';
 import type { Action, Capture, CaptureQuestion } from '../../shared/types.ts';
-import type { CaptureApi } from './chat-logic.ts';
+import type { CaptureApi, RecallPos, Stash } from './chat-logic.ts';
 import {
-  answerForKey, capturesPath, createLandedFeed, createSendQueue, describeResult, filedTarget, groupActions, hitTarget, historyTexts, loadCaptures,
+  answerForKey, capturesPath, downAction, highlightKeys, inputArrow, recallNext, stepOption, createLandedFeed, createSendQueue, describeResult, filedTarget, groupActions, hitTarget, historyTexts, loadCaptures,
   oldestId, openTarget, prependPage, questionChoices, questionKeys, questionPrompt, questionTarget, recallStep,
   searchTerm, upsertCapture, CAPTURE_PAGE, shortDate,
 } from './chat-logic.ts';
@@ -359,5 +359,117 @@ describe('search helpers', () => {
   it('shortDate', () => {
     expect(shortDate('2026-11-15T10:00:00Z')).toBe('2026-11-15');
     expect(shortDate('garbage')).toBe('');
+  });
+});
+
+describe('arrow navigation: answer highlight', () => {
+  it('lists the options in display order (candidates first), pressable keys only', () => {
+    expect(highlightKeys(kindQ)).toEqual(['n', 't', 'a', 'd']);
+    expect(highlightKeys(ambiguousQ)).toEqual(['1', '2', 's', 'd']);
+    const odd: CaptureQuestion = { type: 'kind', options: [{ key: 'ab', label: 'x' }, { key: 'n', label: 'note' }] };
+    expect(highlightKeys(odd)).toEqual(['n']);
+  });
+
+  it('steps right/left and clamps at the ends', () => {
+    const keys = ['n', 't', 'a'];
+    expect(stepOption(keys, null, 'right')).toBe('n');
+    expect(stepOption(keys, null, 'left')).toBe('a');
+    expect(stepOption(keys, 'n', 'right')).toBe('t');
+    expect(stepOption(keys, 'a', 'right')).toBe('a');
+    expect(stepOption(keys, 't', 'left')).toBe('n');
+    expect(stepOption(keys, 'n', 'left')).toBe('n');
+  });
+
+  it('a stale highlight starts over; no options gives null', () => {
+    expect(stepOption(['n', 't'], 'zz', 'right')).toBe('n');
+    expect(stepOption([], null, 'right')).toBeNull();
+  });
+});
+
+describe('arrow navigation: chat input', () => {
+  const base = { dir: 'up' as const, ctrl: false, shift: false, alt: false, meta: false, draft: '', hasCaptures: true };
+  it('plain up in an empty input leaves it', () => {
+    expect(inputArrow(base)).toBe('leave');
+  });
+  it('plain up with no captures, or with text, stays native', () => {
+    expect(inputArrow({ ...base, hasCaptures: false })).toBe('native');
+    expect(inputArrow({ ...base, draft: 'abc' })).toBe('native');
+  });
+  it('plain down is native, empty or not', () => {
+    expect(inputArrow({ ...base, dir: 'down' })).toBe('native');
+    expect(inputArrow({ ...base, dir: 'down', draft: 'abc' })).toBe('native');
+  });
+  it('alt up/down recall, empty or not', () => {
+    expect(inputArrow({ ...base, alt: true })).toBe('recall');
+    expect(inputArrow({ ...base, alt: true, dir: 'down', draft: 'abc' })).toBe('recall');
+  });
+  it('other modifiers keep native behaviour', () => {
+    expect(inputArrow({ ...base, shift: true })).toBe('native');
+    expect(inputArrow({ ...base, ctrl: true })).toBe('native');
+    expect(inputArrow({ ...base, alt: true, ctrl: true })).toBe('native');
+    expect(inputArrow({ ...base, meta: true })).toBe('native');
+  });
+  it('down on the newest capture (or none) returns to the input', () => {
+    expect(downAction(2, 3)).toBe('input');
+    expect(downAction(0, 0)).toBe('input');
+    expect(downAction(1, 3)).toBe('move');
+  });
+});
+
+describe('recallNext (Alt-up / Alt-down)', () => {
+  const texts = ['one', 'two', 'three'];
+  const up = (pos: RecallPos | null, draft: string, stash: Stash | null = null, src: 'text' | 'voice' = 'text') =>
+    recallNext(texts, pos, draft, src, stash, 'up');
+  const down = (pos: RecallPos | null, draft: string, stash: Stash | null = null) => recallNext(texts, pos, draft, 'text', stash, 'down');
+
+  it('walks up and back down to empty', () => {
+    const a = up(null, '');
+    expect(a).toEqual({ pos: { cursor: 2, text: 'three' }, text: 'three', source: 'text', stash: null });
+    const b = up(a.pos, a.text);
+    expect(b.text).toBe('two');
+    const c = down(b.pos, b.text);
+    const d = down(c.pos, c.text);
+    expect(d).toEqual({ pos: null, text: '', source: 'text', stash: null });
+  });
+
+  it('recalls over typed text without losing it', () => {
+    const a = up(null, 'half typed');
+    expect(a.text).toBe('three');
+    expect(a.stash).toEqual({ text: 'half typed', source: 'text' });
+    const b = down(a.pos, a.text, a.stash);
+    expect(b).toEqual({ pos: null, text: 'half typed', source: 'text', stash: null });
+  });
+
+  it('keeps the stash source: a dictated stash comes back as voice', () => {
+    const a = up(null, 'call Anna', null, 'voice');
+    expect(a.source).toBe('text');
+    expect(a.stash).toEqual({ text: 'call Anna', source: 'voice' });
+    expect(down(a.pos, a.text, a.stash)).toMatchObject({ text: 'call Anna', source: 'voice', stash: null });
+  });
+
+  it('editing a recalled line never overwrites the stash', () => {
+    const a = up(null, 'mine');
+    const b = up(a.pos, 'three!', a.stash); // edited after the recall: not recalling any more
+    expect(b.stash).toEqual({ text: 'mine', source: 'text' });
+    expect(b.text).toBe('three'); // starts again from the newest
+    expect(down(b.pos, b.text, b.stash).text).toBe('mine');
+  });
+
+  it('a stash survives a remount (no position) and is restored by stepping down', () => {
+    const stash: Stash = { text: 'mine', source: 'text' };
+    expect(up(null, 'three', stash).stash).toEqual(stash);
+    expect(down(null, 'three', stash)).toEqual({ pos: null, text: 'mine', source: 'text', stash: null });
+  });
+
+  it('after a restore, typed text is stashed again by the next recall', () => {
+    const a = up(null, 'mine');
+    const r = down(a.pos, a.text, a.stash);
+    expect(r.pos).toBeNull();
+    expect(up(r.pos, r.text).stash).toEqual({ text: 'mine', source: 'text' });
+  });
+
+  it('no history leaves the draft alone', () => {
+    expect(recallNext([], null, 'abc', 'text', null, 'up').text).toBe('abc');
+    expect(recallNext([], null, '', 'text', null, 'down').text).toBe('');
   });
 });

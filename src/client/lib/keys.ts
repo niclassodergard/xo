@@ -103,6 +103,8 @@ export interface KeyEngine {
   /** Feed one key. Returns true if the key was consumed (caller should preventDefault). */
   handle(ev: KeyLike, currentMode: Mode, domEvent?: KeyboardEvent): boolean;
   reset(): void;
+  /** True while any modal layer (overlay, voice recording) exists, whatever the mode. */
+  modalOpen(): boolean;
   listBindings(): BindingInfo[];
 }
 
@@ -175,6 +177,7 @@ export function createKeyEngine(
       return false;
     },
     reset() { setPending(null); },
+    modalOpen() { return [...layers].some((l) => l.scope === 'modal'); },
     listBindings() {
       const out: BindingInfo[] = [];
       const seen = new Set<string>();
@@ -199,6 +202,9 @@ export const engine: KeyEngine = createKeyEngine(undefined, (seq) => {
   pendingKeys.value = seq ? seq.join(' ') : '';
   if (seq) pendingTimer = setTimeout(() => { pendingKeys.value = ''; }, SEQUENCE_TIMEOUT_MS);
 });
+
+/** True while a modal layer exists. Element-level key handlers (the chat input) use it to stand down behind overlays. */
+export function modalOpen(): boolean { return engine.modalOpen(); }
 
 // Key-up listeners (hold-to-talk). The engine only sees key-down: a binding runs on the first
 // down (check `e.repeat` to ignore auto-repeat) and the feature subscribes here for the release.
