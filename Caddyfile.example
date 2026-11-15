@@ -1,0 +1,44 @@
+# OPTIONAL alternative to `tailscale serve` (the primary path, see the README).
+# Use it only if you want Caddy in front of XO, and bind it to the Tailscale interface so XO is
+# never reachable from the public internet. Copy to `Caddyfile`, replace the address.
+#
+# XO's environment:
+#   XO_PUBLIC_ORIGIN=https://<host>.<tailnet>.ts.net   (exactly the origin the browser uses)
+#   XO_TRUST_PROXY=1                                   (one proxy in front of Node)
+# Only Caddy may reach the Node port: publish it on 127.0.0.1 only (-p 127.0.0.1:3000:3000).
+# XO_TRUST_PROXY trusts X-Forwarded-For, so if Node were reachable directly, anyone could spoof the
+# client IP used by the login rate limiter.
+#
+# Certificates: Caddy cannot get a public ACME certificate for a *.ts.net name by itself; use
+# Tailscale's certificate (`tailscale cert <host>.<tailnet>.ts.net`) via the `tls` directive, or
+# the Caddy Tailscale integration. Do not publish this site on a public address.
+# `tailscale cert` certificates expire after about 90 days: renew them (re-run the command and reload Caddy).
+# Run `caddy validate --config Caddyfile` on your Caddy version before use: the log filter below may
+# need a `fields { ... }` block on older versions.
+
+{
+	# Listen on the Tailscale address only (replace with this machine's `tailscale ip -4`).
+	default_bind 100.64.0.1
+}
+
+<host>.<tailnet>.ts.net {
+	tls /etc/caddy/certs/<host>.<tailnet>.ts.net.crt /etc/caddy/certs/<host>.<tailnet>.ts.net.key
+
+	# Access logs record method, URI, status and headers, never request or response bodies. Caddy
+	# redacts Cookie, Authorization and Set-Cookie unless the global option `servers { log_credentials }`
+	# is set: do not set it. The CSRF token travels in the X-XO-CSRF request header, so drop it too.
+	log {
+		output file /var/log/caddy/xo-access.log
+		format filter {
+			request>headers>X-Xo-Csrf delete
+			wrap json
+		}
+	}
+
+	encode zstd gzip
+	# Voice uploads are limited to 10 MB by XO; keep the proxy limit just above that.
+	request_body {
+		max_size 11MB
+	}
+	reverse_proxy 127.0.0.1:3000
+}

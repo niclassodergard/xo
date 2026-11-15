@@ -1,0 +1,41 @@
+# Secrets and data: never part of the build context or the image (any depth)
+.openrouter-key
+**/.openrouter-key
+.env
+**/.env
+.env.*
+**/.env.*
+!.env.example
+!**/.env.example
+*.db
+**/*.db
+*.db-*
+**/*.db-*
+*.sqlite
+**/*.sqlite
+*.key
+**/*.key
+*.pem
+**/*.pem
+xo-export-*
+**/xo-export-*
+
+# VCS, dependencies, outputs
+.git
+**/.git
+node_modules
+**/node_modules
+dist
+coverage
+test-results
+playwright-report
+.DS_Store
+**/.DS_Store
+
+# Not needed at runtime
+docs
+e2e
+test
+**/*.test.ts
+Dockerfile
+.dockerignore

@@ -101,6 +101,11 @@ h2, h3 { margin: 0; font-size: inherit; font-weight: normal; }
 .field { display: flex; flex-direction: column; gap: 0.15rem; margin-bottom: 0.6rem; }
 .field span { color: var(--dim); }
 
+/* Chat fills the main area: the log scrolls, the input line and hint stay visible below it. */
+.pane.chat { flex: 1; min-height: 0; }
+.pane.chat > .pane-body { display: flex; flex-direction: column; overflow: hidden; }
+.chat-log { flex: 1; min-height: 0; overflow: auto; }
+
 /* Phone width: the nav becomes a horizontal strip above the main pane. */
 @media (max-width: 700px) {
   .app { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr) auto; grid-template-areas: 'header' 'nav' 'main' 'status'; }

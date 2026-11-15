@@ -13,6 +13,8 @@ export interface SelectableListProps<T> {
   /** Set false on all but the focused list when a view shows several. Default true. */
   enabled?: boolean;
   onSelect?: (item: T) => void;
+  /** Help-overlay text for the bindings in `keys`, by spec (e.g. { x: 'toggle done' }). */
+  keyDescriptions?: Record<string, string>;
 }
 
 function idOf(item: unknown): string | number | undefined {
@@ -47,7 +49,10 @@ export function SelectableList<T>(props: SelectableListProps<T>) {
   }
   useKeys(bindings, {
     scope: 'list', enabled,
-    descriptions: { j: 'move down', k: 'move up', 'g g': 'top', 'shift+g': 'bottom', enter: 'open' },
+    descriptions: {
+      j: 'move down', down: 'move down', k: 'move up', up: 'move up', 'g g': 'top', 'shift+g': 'bottom', enter: 'open',
+      ...props.keyDescriptions,
+    },
   });
 
   const selectedItem = sel >= 0 ? items[sel] : undefined;

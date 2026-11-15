@@ -19,16 +19,15 @@ added, and — always — when a mistake is made (see "Lessons learned" below).
   purge), 4 (OpenRouter classifier/transcriber/voice route, ZDR opt-in),
   5 (client shell: TUI, keys, router, API client, login, session lock, drafts),
   6 (shared parsing and name matching).
-- **Next:** wave C — steps 7 (capture pipeline), 8 and 9 (client views),
-  10 (client voice), 11 (export, Docker, README); then step 12 (integration,
-  Playwright, acceptance).
+- **Done and reviewed (2026-11-15, wave C):** step 7 (capture pipeline: classify, ask, file, undo, reclassify), 8 (chat, actions, notes, people, search views), 9 (person + 1-1 meeting views), 10 (voice: push-to-talk, dictation, commands), 11 (Markdown export, Dockerfile, Tailscale deploy docs, README).
+- **Next:** step 12 (integration test, Playwright smoke test, acceptance pass, README key bindings, editor tsconfig, voice `source`, real Docker build where available).
 - Update this section as milestones land.
 
 ## Settled decisions (v0.1, interview of 2026-11-15)
 
 | Area | Decision |
 |---|---|
-| Users / access | Single user. Hosted on a **public server** behind a login. Hosting target undecided → stay portable: one Node process + SQLite file, Dockerfile, behind an HTTPS reverse proxy (e.g. Caddy). Develop locally first. |
+| Users / access | Single user, password + TOTP login. **Reachable only over Tailscale** (user decision 2026-11-15, replaces "public server"): XO is not exposed to the internet; `tailscale serve` provides HTTPS on the tailnet (needed for the microphone). Stay portable: one Node process + SQLite file, Dockerfile. Login/auth hardening stays in place as defence in depth. |
 | Auth | Password + TOTP. Secure session cookie (HttpOnly, Secure, SameSite), rate-limited login, CSRF protection. |
 | Doc types | Notes, tasks/actions, people, 1-1 meetings (agendas + meeting notes). Out of scope: journal, projects, decisions, goals. |
 | Classification | LLM classifies chat input. **If unsure it must not guess** — it asks the user to classify (keyboard-selectable inline choice). Confident results are filed visibly with one-key undo/reclassify. Prefix commands (`/note`, `/todo`, `@person`…) force the type. |
@@ -54,15 +53,16 @@ Keep this list accurate — every command here must work. Needs Node 26 and pnpm
 | Command | What it does |
 |---|---|
 | `pnpm install` | Install dependencies |
-| `pnpm dev` | Server (`node --watch`, port 3000) + Vite client (127.0.0.1:5173, strict port); open `http://localhost:5173`. Local `.env` needs `XO_COOKIE_INSECURE=true` and `XO_PUBLIC_ORIGIN=http://localhost:5173`. Use `XO_LLM=fake` until step 4 lands (the real OpenRouter factories are stubs and throw at startup). **Never run Vite with `--host` in this repo.** |
+| `pnpm dev` | Server (`node --watch`, port 3000) + Vite client (127.0.0.1:5173, strict port); open `http://localhost:5173`. Local `.env` needs `XO_COOKIE_INSECURE=true` and `XO_PUBLIC_ORIGIN=http://localhost:5173`. Use `XO_LLM=fake` for local dev (with `.openrouter-key` present the server otherwise calls OpenRouter for real, which needs the user's OK). Never run Vite with `--host`. |
 | `pnpm typecheck` | `tsc` for server/shared and for the client |
 | `pnpm test` | Vitest (unit + API tests; no network, no API key needed) |
 | `pnpm build` | `vite build` (client root `src/client`) into `dist/client` |
 | `pnpm start` | Run the server (serves API + `dist/client`) with Node type stripping |
 | `pnpm e2e` | Playwright smoke test — **available after step 12** (first time: `pnpm exec playwright install chromium`) |
 | `pnpm xo setup [--force]` | Create the single user (password + TOTP) — **functional after step 2** |
-| `pnpm xo export [--out <dir>]` | Markdown export — **functional after step 11** |
-| `docker build -t xo .` | Container image — **available after step 11** |
+| `pnpm xo export [--out <dir>]` | Markdown export (default `./xo-export-YYYYMMDD-HHmmss`; target must be new or empty; dir 0700, files 0600; skips soft-deleted rows) |
+| `docker build -t xo .` | Container image (non-root, `/data` volume, no key inside; supply the key at run time). README has the `docker run` and `tailscale serve` setup (Caddy is an optional alternative). Not yet built locally: Docker was unavailable in step 11 |
+| `docker exec -it xo node src/server/cli/main.ts setup` | Create the user inside a running container (no pnpm in the runtime image) |
 
 There is no linter or formatter in v0.1; `pnpm typecheck` (strict) is the gate.
 
@@ -109,12 +109,15 @@ Established in step 1. Every programmer brief must point at this section.
   that own the chat or search input consume focus requests with
   `useFocusRequest('chat' | 'search', ...)`. Async results check the session
   `epoch()` before writing shared signals.
-- **Browser testing:** after `pnpm build`, restart any running XO server
+- **Navigation:** when a view's Esc/back target is the entry just left, use
+  `replace` (or `back()` if history holds it), so two views never ping-pong.
+- **Browser testing:** rebuild and restart the server *immediately* before each
+  browser run (parallel builds replace `dist/` and break a cached `index.html`);
+  clear fields with `page.fill(sel, '')`. After `pnpm build`, restart any running XO server
   (it caches `index.html`). Scripts that log in must wait out the 30 s TOTP step
   or create a fresh user per run (`setupUser`, confirming with the previous
   step's code).
-- **Local dev with a key before step 4 lands:** set `XO_LLM=fake`, otherwise
-  startup fails on the "not implemented" OpenRouter stubs.
+- **Local dev uses `XO_LLM=fake`:** with `.openrouter-key` present and `XO_LLM` unset, the server calls OpenRouter for real (costs money, sends data out) — that needs the user's OK.
 
 ## Security rules (non-negotiable)
 
@@ -281,6 +284,71 @@ pointed out by the user.
 - **2026-11-15 — Hiding isn't removing.** The 401 lock first hid the app with
   CSS while its loaded data stayed in the DOM. **Rule:** when access ends,
   unmount or clear server-loaded data; keep only what the user typed.
+- **2026-11-15 — Write paths bypassed the redaction rule.** The list hid a
+  deleted item's capture, but undo/reclassify still returned its text and
+  reclassify brought it back for good. **Rule:** redaction and erasure rules are
+  enforced on every read *and* write path on the server, never only in the
+  client or one endpoint.
+- **2026-11-15 — Async results stole focus mid-typing.** A chat submit that came
+  back with a question blurred the input while the user kept typing, so their
+  letters ran as commands (`d` discarded a capture). **Rule:** an async result
+  never moves focus if the user has typed since the request started; a second
+  submit is queued, never dropped.
+- **2026-11-15 — User-typed text was silently dropped.** A per-key in-flight
+  guard meant for toggles also swallowed a second distinct create. **Rule:**
+  dedupe guards apply to repeated actions on one item, never to creates;
+  user-typed text is never discarded without telling the user.
+- **2026-11-15 — A visible "undo" offer didn't match the key.** Pressing `u`
+  after an "undo" flash undid an unrelated chat capture. **Rule:** an action
+  offered in a flash is reachable by keyboard, and doesn't collide with a global
+  key of the same meaning.
+- **2026-11-15 — Feature-level window listeners fought the key engine.** Voice's
+  own Esc listener couldn't stop the global Esc, so cancelling a recording also
+  navigated back. **Rule:** feature keys are bindings in the key engine with the
+  right scope; test that the global binding doesn't also fire.
+- **2026-11-15 — "Is it done?" must follow the thing just answered.** Focus
+  returned to the chat input only when *no* capture anywhere was pending, so older
+  questions stayed live and stray typing answered them. **Rule:** decide focus
+  from the item just acted on. Queues of user-typed text are module-level (survive
+  a 401 remount) and wiped on logout; they remove entries by identity (never
+  `shift()` after an await) and carry a generation that logout bumps. When a keyboard-focus rule changes, update
+  or flag the browser scripts that assume the old rule in the same pass.
+- **2026-11-15 — Re-resolving lost the user's explicit choice.** A fix that
+  re-checked names against current people turned "create Lisa" into a silent
+  link to "Lisa Berg", and an archived link into a guess. **Rule:** re-resolving
+  stored state keeps the original question's strictness — only an exact match
+  may replace an explicit choice; anything else asks.
+- **2026-11-15 — Unattended capture of a sensitive resource.** A mic recording
+  started by toggle and forgotten was auto-uploaded at the 2-minute limit.
+  **Rule:** anything that records or holds a sensitive resource gets a discard
+  path on tab hidden, `pagehide`, blur and session end, and only auto-sends while
+  the user is demonstrably present (key held).
+- **2026-11-15 — Destructive keys had a hidden fallback target.** `u`/`r`
+  acted on "the newest filed capture" when the selection wasn't filed, so stray
+  typing undid unrelated items. **Rule:** destructive shortcuts act only on the
+  visible selection. Edit modes that hold drafts are derived from persisted
+  `drafts` at load, not only from component state. A scrolling log plus a pinned
+  input needs `min-height: 0` down the whole flex chain; check at phone width.
+- **2026-11-15 — Sensitive output written in place.** A failed export left a
+  partial plaintext directory that also blocked retries. **Rule:** write
+  sensitive output to a private temp sibling and move it into place; clean up on
+  failure.
+- **2026-11-15 — Collision fallbacks must be checked too.** The export's
+  `<slug>-<id>` fallback could equal another person's plain slug. **Rule:** a
+  fallback name is itself checked for collisions.
+- **2026-11-15 — Parallel steps coded against an unfinished contract.** The
+  Chat view inferred "deleted" from blank fields while the server marked it
+  differently, and a cast (`c as {deleted?: boolean}`) hid the mismatch from
+  the compiler. **Rule:** when a parallel step depends on another's API, the
+  coordinator relays the final contract as soon as it lands, and states are
+  modelled by explicit fields; no casts that bypass shared types.
+- **2026-11-15 — Optimistic UI before the in-flight guard.** A fast second
+  key press would have flipped the UI with no request sent. **Rule:** check any
+  in-flight or dedupe guard *before* applying an optimistic change.
+- **2026-11-15 — View steps shipped without a browser check.** Unit tests of
+  pure helpers cover none of the focus, mode or overlay behaviour. **Rule:**
+  every client view step gets a scripted real-browser check of its key flows
+  before (or as part of) review; briefs for view steps say so.
 - **2026-11-15 — An overlay opened underneath another.** Ctrl-K over the
   Prompt opened the palette behind it, so the user typed into a box they
   couldn't see. **Rule:** a global key that opens an overlay is a no-op while

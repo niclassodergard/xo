@@ -31,7 +31,7 @@ function parseErrorBody(text: string): { code: string; message: string } | null 
   return null;
 }
 
-async function request<T>(method: Method, path: string, body?: unknown, audio?: Blob, canRetry = true): Promise<T> {
+async function request<T>(method: Method, path: string, body?: unknown, audio?: Blob, canRetry = true, signal?: AbortSignal): Promise<T> {
   assertApiPath(path);
   const headers: Record<string, string> = { Accept: 'application/json' };
   if (method !== 'GET') {
@@ -49,7 +49,7 @@ async function request<T>(method: Method, path: string, body?: unknown, audio?: 
 
   let res: Response;
   try {
-    res = await fetch(path, { method, headers, body: payload, credentials: 'same-origin', cache: 'no-store', redirect: 'error' });
+    res = await fetch(path, { method, headers, body: payload, credentials: 'same-origin', cache: 'no-store', redirect: 'error', signal });
   } catch {
     throw new ApiError(0, 'network', 'Cannot reach the server.');
   }
@@ -62,12 +62,14 @@ async function request<T>(method: Method, path: string, body?: unknown, audio?: 
       const fresh = await request<SessionResponse>('GET', '/api/auth/session', undefined, undefined, false);
       if (session.value && fresh.csrfToken && fresh.csrfToken !== before) {
         session.value = { csrfToken: fresh.csrfToken };
-        return request<T>(method, path, body, audio, false);
+        return request<T>(method, path, body, audio, false, signal);
       }
     } catch { /* fall through to the original 403 */ }
   }
 
   const text = res.status === 204 ? '' : await res.text().catch(() => '');
+  // A timeout/cancel during the body read must not look like an empty (successful) response.
+  if (signal?.aborted) throw new ApiError(0, 'network', 'Request aborted.');
   if (!res.ok) {
     if (res.status === 401) session.value = null;
     const parsed = parseErrorBody(text);
@@ -92,5 +94,6 @@ export const api = {
   post: <T>(path: string, body?: unknown): Promise<T> => request<T>('POST', path, body),
   patch: <T>(path: string, body: unknown): Promise<T> => request<T>('PATCH', path, body),
   del: async (path: string): Promise<void> => { await request<void>('DELETE', path); },
-  postAudio: (path: string, blob: Blob): Promise<{ text: string }> => request<{ text: string }>('POST', path, undefined, blob),
+  postAudio: (path: string, blob: Blob, signal?: AbortSignal): Promise<{ text: string }> =>
+    request<{ text: string }>('POST', path, undefined, blob, true, signal),
 };

@@ -22,6 +22,7 @@ export interface Capture {
   draft: CaptureDraft; question: CaptureQuestion | null;
   filed: ItemRef[]; summary: string;                                    // e.g. "Action (me) · Anna: send budget"
   classifiedBy: 'prefix' | 'llm' | 'user' | null; createdAt: string;
+  deleted: boolean;                                                     // true: every filed item is gone; text/draft/summary are redacted (list only)
 }
 export interface SearchResult { kind: ItemKind | 'person' | 'meeting'; id: Id; title: string; snippet: string; personId: Id | null }
 export interface PersonDetail { person: Person; openAgenda: AgendaItem[]; openActions: Action[]; notes: Note[]; meetings: Meeting[]; activeMeetingId: Id | null }

@@ -51,6 +51,16 @@ export function listPeople(db: DatabaseSync, opts: { includeArchived?: boolean }
   return (db.prepare(sql).all() as unknown as PersonRow[]).map(mapPerson).sort(byName);
 }
 
+/** Slim list for name matching: non-archived people without their notes, sorted like listPeople. */
+export function listPeopleForMatching(db: DatabaseSync): Pick<Person, 'id' | 'name' | 'aliases'>[] {
+  const rows = db
+    .prepare('SELECT id, name, aliases FROM people WHERE archived_at IS NULL')
+    .all() as unknown as { id: number; name: string; aliases: string }[];
+  return rows
+    .map((r) => ({ id: r.id, name: r.name, aliases: parseAliases(r.aliases) }))
+    .sort((a, b) => a.name.localeCompare(b.name, 'sv', { sensitivity: 'base' }) || a.id - b.id);
+}
+
 export function getPerson(db: DatabaseSync, id: Id): Person | null {
   const r = db.prepare('SELECT * FROM people WHERE id = ?').get(id) as unknown as PersonRow | undefined;
   return r ? mapPerson(r) : null;
