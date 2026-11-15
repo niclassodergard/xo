@@ -39,10 +39,7 @@ added, and — always — when a mistake is made (see "Lessons learned" below).
   13. `docker build` and run, non-root, `/data`: blocked (Docker not installed)
   14. monospace, box-drawing, dark, one accent, phone width: pass at 390px in Chromium; use on a real phone: manual
 - **Outstanding manual checks:** `docker build` and run (Docker was not installed; Dockerfile unverified), real OpenRouter classification and transcription (needs the user's OK), push-to-talk on real Chrome/Safari desktop and iOS (incl. the Send/Discard prompt on a real phone), real authenticator app, `tailscale serve` header behaviour (README checklist), audio ZDR enforcement at OpenRouter.
-- **User instruction for v0.2 (2026-11-15):** run all steps without asking in
-  between; when every step has a clean review, commit + push and deploy (D2,
-  with the DB backup). Live OpenRouter checks still need the user's OK.
-- **v0.2 implemented and reviewed (2026-11-15):** `docs/plans/2026-11-15-xo-v0.2-ui.md`
+- **v0.2 deployed (2026-11-15, commit 34847f7; DB backup in `~/.xo/backups/`, migrations 005+006 applied, integrity ok):** `docs/plans/2026-11-15-xo-v0.2-ui.md`
   (C1 contracts: `docs/plans/2026-11-15-xo-v0.2-c1-contracts.md`). Claude-desktop-style
   UI, Projects (with pins/recents) and question answering. Every step (S1–S4,
   C1–C7, E, Q1, Q2) passed review and security review. `pnpm typecheck`,
