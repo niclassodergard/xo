@@ -1,0 +1,19 @@
+# Secrets — never commit
+.openrouter-key
+.env
+.env.*
+*.key
+*.pem
+
+# Data (lives outside the repo, but guard anyway)
+*.db
+*.db-*
+*.sqlite
+
+# Build / deps
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
+.DS_Store
