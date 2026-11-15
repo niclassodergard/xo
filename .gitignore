@@ -17,3 +17,7 @@ coverage/
 playwright-report/
 test-results/
 .DS_Store
+
+# XO
+!.env.example
+xo-export-*
