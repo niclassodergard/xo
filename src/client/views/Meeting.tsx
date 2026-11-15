@@ -172,7 +172,7 @@ export default function Meeting() {
       'shift+tab': () => setPane((p) => cyclePane(p, PANE_COUNT, -1)),
       // Replace this entry (not push) so the next Esc leaves the person instead of coming back here.
       esc: () => navigate(`/people/${personId}`, { replace: true }),
-      // Nothing in a meeting is undone with `u`; stop the global "undo last chat capture" from firing here.
+      // Nothing in a meeting is undone with `u`; say so instead of doing nothing.
       u: () => flash('Nothing to undo here. x unchecks an item.'),
       ...(active
         ? {

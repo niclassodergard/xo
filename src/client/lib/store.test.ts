@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  appPhase, chatDraft, clearDraft, drafts, epoch, flashMessage, logout, overlay, people, personPicker, promptRequest,
+  appPhase, appendVoiceDraft, chatDraft, chatDraftSource, editChatDraft, prependChatDraft, restoreChatDraft, clearDraft, drafts, epoch, flashMessage, logout, overlay, people, personPicker, promptRequest,
   refreshPeople, searchQuery, session, setDraft, shellActive, syncDraft, togglePalette,
 } from './store.ts';
 import { mode } from './keys.ts';
@@ -158,3 +158,67 @@ describe('draft cleanup and stale editors', () => {
   });
 });
 
+
+describe('chatDraftSource', () => {
+  beforeEach(() => { chatDraft.value = ''; });
+  it('is text for an empty or typed draft', () => {
+    expect(chatDraftSource.value).toBe('text');
+    editChatDraft('hello');
+    expect(chatDraftSource.value).toBe('text');
+  });
+  it('dictation makes it voice; a small typed fix keeps it voice, a lot of typing turns it text', () => {
+    appendVoiceDraft('call Anna about the budget');
+    expect(chatDraftSource.value).toBe('voice');
+    editChatDraft('call Anna about the budget.');
+    expect(chatDraftSource.value).toBe('voice');
+    editChatDraft('call Anna about the budget. and a long typed addition after it');
+    expect(chatDraftSource.value).toBe('text');
+  });
+  it('typed text first, then a short dictation, stays text', () => {
+    editChatDraft('a long typed thought here');
+    appendVoiceDraft('a long typed thought here ok');
+    expect(chatDraftSource.value).toBe('text');
+  });
+  it('recalled history is text even over a voice draft', () => {
+    appendVoiceDraft('spoken');
+    editChatDraft('older entry', true);
+    expect(chatDraftSource.value).toBe('text');
+  });
+  it('resets when the draft is cleared (send) and on logout; a 401 keeps it', async () => {
+    appendVoiceDraft('spoken words');
+    session.value = null; // 401
+    expect(chatDraftSource.value).toBe('voice');
+    chatDraft.value = '';
+    expect(chatDraftSource.value).toBe('text');
+    appendVoiceDraft('again spoken');
+    session.value = { csrfToken: 't' };
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 204 })));
+    await logout();
+    expect(chatDraft.value).toBe('');
+    editChatDraft('x');
+    expect(chatDraftSource.value).toBe('text');
+  });
+  it('restoreChatDraft keeps the original source', () => {
+    restoreChatDraft('spoken', 'voice');
+    expect(chatDraftSource.value).toBe('voice');
+    restoreChatDraft('typed', 'text');
+    expect(chatDraftSource.value).toBe('text');
+  });
+});
+
+describe('prependChatDraft', () => {
+  beforeEach(() => { chatDraft.value = ''; });
+  it('a restored voice text keeps the draft voice, a restored typed text does not', () => {
+    prependChatDraft('spoken words', 'voice');
+    expect(chatDraftSource.value).toBe('voice');
+    chatDraft.value = '';
+    editChatDraft('new typed');
+    prependChatDraft('spoken words here', 'voice');
+    expect(chatDraft.value).toBe('spoken words here new typed');
+    expect(chatDraftSource.value).toBe('voice');
+    chatDraft.value = '';
+    editChatDraft('new typed');
+    prependChatDraft('typed old', 'text');
+    expect(chatDraftSource.value).toBe('text');
+  });
+});

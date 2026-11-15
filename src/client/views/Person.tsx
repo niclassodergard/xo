@@ -122,7 +122,7 @@ export default function Person() {
     undoOffer.current = { run: act, until: Date.now() + UNDO_WINDOW_MS };
     flash(`${message} - u to undo`, 'info', { action: { label: 'undo', run: () => { undoOffer.current = null; act(); } } });
   };
-  // View-scope `u`: only ever undoes this view's own offer, never the global "undo last chat capture".
+  // View-scope `u`: only ever undoes this view's own offer.
   const undo = () => {
     const o = undoOffer.current;
     undoOffer.current = null;

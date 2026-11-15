@@ -24,7 +24,7 @@ export default function VoiceIndicator() {
   }
   if (s.phase === 'confirming') {
     return (
-      <span role="alert">
+      <span class="voice-confirm" role="alert">
         <span class="accent">{CHOICE_TEXT}</span>{' '}
         <button type="button" class="tbtn" onClick={sendRecording}>Send (Enter)</button>{' '}
         <button type="button" class="tbtn" onClick={discardRecording}>Discard (Esc)</button>

@@ -143,11 +143,13 @@ export function filedTarget(captures: Capture[], selectedId: Id | null): Capture
 
 // ---- send queue ---------------------------------------------------------------------------
 
+export type CaptureSource = 'text' | 'voice';
+
 export interface SendQueueHooks {
   /** A text was accepted. */
   onSent(c: Capture): void;
   /** The server rejected this text (nothing written); it has been removed from the queue. */
-  onRejected(text: string, err: unknown): void;
+  onRejected(text: string, err: unknown, source: CaptureSource): void;
   /** Session or network trouble: everything stays queued, in order. `waiting` = entries left. */
   onTransient(err: unknown, waiting: number): void;
   isTransient(err: unknown): boolean;
@@ -161,30 +163,30 @@ export interface SendQueueHooks {
  * A retry after a status-0 (network) failure may duplicate a capture the server did receive; accepted.
  */
 export function createSendQueue() {
-  const items: { text: string }[] = [];
+  const items: { text: string; source: CaptureSource }[] = [];
   let generation = 0;
   let drainingGen = -1;
   return {
-    push(text: string): void { items.push({ text }); },
+    push(text: string, source: CaptureSource = 'text'): void { items.push({ text, source }); },
     size: () => items.length,
     texts: () => items.map((e) => e.text),
     reset(): void { items.length = 0; generation++; },
-    async drain(send: (text: string) => Promise<Capture>, h: SendQueueHooks): Promise<void> {
+    async drain(send: (text: string, source: CaptureSource) => Promise<Capture>, h: SendQueueHooks): Promise<void> {
       const gen = generation;
       if (drainingGen === gen) return;
       drainingGen = gen;
-      const remove = (entry: { text: string }) => { const i = items.indexOf(entry); if (i >= 0) items.splice(i, 1); };
+      const remove = (entry: { text: string; source: CaptureSource }) => { const i = items.indexOf(entry); if (i >= 0) items.splice(i, 1); };
       try {
         while (gen === generation && items.length > 0) {
           const entry = items[0]!;
           let c: Capture;
           try {
-            c = await send(entry.text);
+            c = await send(entry.text, entry.source);
           } catch (err) {
             if (gen !== generation) return;
             if (h.isTransient(err)) { h.onTransient(err, items.length); return; }
             remove(entry);
-            h.onRejected(entry.text, err);
+            h.onRejected(entry.text, err, entry.source);
             continue;
           }
           if (gen !== generation) return;
@@ -195,6 +197,28 @@ export function createSendQueue() {
         if (drainingGen === gen) drainingGen = -1;
       }
     },
+  };
+}
+
+// ---- landed captures (Chat remount) -------------------------------------------------------
+
+/**
+ * Results of sends that completed, kept at module level next to the shared send queue so that whichever
+ * Chat is mounted when a send lands (the one that started it may be gone) can pick them up. Each entry
+ * remembers the session epoch it landed in; `take` drops entries from an earlier session.
+ */
+export function createLandedFeed() {
+  let items: { capture: Capture; epoch: number }[] = [];
+  return {
+    push(capture: Capture, epoch: number): void { items.push({ capture, epoch }); },
+    /** Everything that landed in session `epoch`, oldest first; empties the feed. */
+    take(epoch: number): Capture[] {
+      const out = items.filter((i) => i.epoch === epoch).map((i) => i.capture);
+      items = [];
+      return out;
+    },
+    clear(): void { items = []; },
+    size: () => items.length,
   };
 }
 

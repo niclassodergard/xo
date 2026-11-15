@@ -1,4 +1,4 @@
-import { effect } from '@preact/signals';
+import { effect, signal } from '@preact/signals';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { LIMITS } from '../../shared/api.ts';
 import type { AnswerCaptureRequest, CreateCaptureRequest } from '../../shared/api.ts';
@@ -9,20 +9,28 @@ import { composing, useKeys } from '../lib/keys.ts';
 import type { KeyHandler } from '../lib/keys.ts';
 import { navigate } from '../lib/router.ts';
 import {
-  chatDraft, epoch, errorText, flash, pickPerson, personPicker, refreshPeople, requestFocus, session, shellActive, useFocusRequest,
+  chatDraft, chatDraftSource, editChatDraft, epoch, errorText, flash, pickPerson, personPicker, prependChatDraft, refreshPeople, requestFocus, restoreChatDraft, session, shellActive, useFocusRequest,
 } from '../lib/store.ts';
 import {
-  answerForKey, createSendQueue, describeResult, filedPerson, filedTarget, formatTime, historyTexts, loadCaptures, openTarget,
+  answerForKey, createLandedFeed, createSendQueue, describeResult, filedPerson, filedTarget, formatTime, historyTexts, loadCaptures, openTarget,
   optionLabel, prependPage, questionChoices, questionKeys, questionTarget, recallStep, upsertCapture,
 } from './chat-logic.ts';
+import type { CaptureSource } from './chat-logic.ts';
 
 // Unsent texts live at module level, so they survive the view unmounting on a 401 and go out in order
 // after re-login (the remounted Chat drains them). A status-0 retry may duplicate a capture the server
 // did receive; that is accepted.
-const sendQueue = createSendQueue();
+export const sendQueue = createSendQueue(); // exported for tests
+// Captures that landed from a send. The Chat that is mounted (not necessarily the one that started the
+// drain) consumes them, so a capture whose send finished after the user left and came back still shows.
+export const landed = createLandedFeed();
+const landedTick = signal(0);
 // An explicit logout wipes unsent texts like every other draft (a 401 alone keeps shellActive true) and
 // invalidates any drain still waiting on a response.
 effect(() => { if (!shellActive.value) sendQueue.reset(); });
+// Any session end (401 lock included) drops landed captures: they are server data and must not reappear
+// after re-login. The send queue is NOT reset here; queued texts survive a 401.
+effect(() => { if (session.value === null) landed.clear(); });
 
 /** Chat: capture log + input line. Classification questions are answered with a single key. */
 export default function Chat() {
@@ -41,6 +49,17 @@ export default function Chat() {
   // Arriving in Chat always lands in the input, so stray typing never acts as commands. Question keys
   // become live when the user leaves the input (Esc) or selects a capture.
   useLayoutEffect(() => { input.current?.focus(); }, []);
+
+  // Show captures that landed from a send, whichever Chat started it. Runs on mount (leftovers) and on
+  // every landing; the feed drops entries from an earlier session (epoch guard).
+  useEffect(() => effect(() => {
+    void landedTick.value;
+    const cs = landed.take(epoch());
+    const last = cs[cs.length - 1];
+    if (!last || !alive.current) return;
+    setCaptures((cur) => cs.reduce(upsertCapture, cur));
+    setSelId(last.id);
+  }), []);
 
   // Initial load: a plain GET (no state change on route load).
   useEffect(() => {
@@ -104,15 +123,15 @@ export default function Chat() {
   }
 
   /** Put unsent text back without ever overwriting what the user has typed since. */
-  function restore(text: string, err: unknown): void {
+  function restore(text: string, err: unknown, source: CaptureSource): void {
     if (chatDraft.peek() === '') {
-      chatDraft.value = text;
+      restoreChatDraft(text, source);
       flash(`Not sent: ${errorText(err)}`, 'error');
     } else {
       const snippet = text.length > 40 ? `${text.slice(0, 40)}…` : text;
       flash(`Not sent (${errorText(err)}): "${snippet}"`, 'error', {
         sticky: true,
-        action: { label: 'restore', run: () => { const cur = chatDraft.peek(); chatDraft.value = cur ? `${text} ${cur}` : text; } },
+        action: { label: 'restore', run: () => { prependChatDraft(text, source); } },
       });
     }
   }
@@ -121,15 +140,16 @@ export default function Chat() {
   function submit(): void {
     const text = chatDraft.peek().trim();
     if (!text) return;
+    const source = chatDraftSource.peek();
     chatDraft.value = '';
     recall.current = null;
-    sendQueue.push(text);
+    sendQueue.push(text, source);
     void drain();
   }
 
   async function drain(): Promise<void> {
     const e = epoch();
-    await sendQueue.drain((text) => api.post<Capture>('/api/captures', { text, source: 'text' } satisfies CreateCaptureRequest), {
+    await sendQueue.drain((text, source) => api.post<Capture>('/api/captures', { text, source } satisfies CreateCaptureRequest), {
       isTransient: (err) => err instanceof ApiError && (err.status === 0 || err.status === 401 || err.status === 429),
       onTransient: (err, waiting) => {
         // Session or network trouble: everything stays queued, in order, with a retry.
@@ -138,10 +158,11 @@ export default function Chat() {
         }
       },
       // Nothing was written for this text: give it back and carry on with the rest.
-      onRejected: (text, err) => restore(text, err),
+      onRejected: (text, err, source) => restore(text, err, source),
       onSent: (c) => {
         if (e !== epoch()) return; // session ended meanwhile; the next send stops and keeps its text
-        if (alive.current) { setCaptures((cur) => upsertCapture(cur, c)); setSelId(c.id); }
+        landed.push(c, e);
+        landedTick.value++;
         if (filedPerson(c)) void refreshPeople();
       },
     });
@@ -239,7 +260,7 @@ export default function Chat() {
       const from = recall.current?.cursor ?? texts.length;
       const step = recallStep(texts, from, e.key === 'ArrowUp' ? 'up' : 'down');
       recall.current = step;
-      chatDraft.value = step.text;
+      editChatDraft(step.text, true);
     }
   };
 
@@ -287,7 +308,7 @@ export default function Chat() {
         <input
           ref={input} class="textedit" type="text" value={chatDraft.value} spellcheck={false} autocomplete="off"
           maxLength={LIMITS.captureText} placeholder="note, thought or action…" aria-label="Chat input"
-          onInput={(e) => { chatDraft.value = (e.target as HTMLInputElement).value; }}
+          onInput={(e) => { editChatDraft((e.target as HTMLInputElement).value); }}
           onKeyDown={onKeyDown}
         />
         <button type="button" class="tbtn" onClick={submit} aria-label="Send">⏎</button>

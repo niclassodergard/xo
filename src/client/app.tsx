@@ -79,12 +79,11 @@ function GlobalKeys(props: { enabled: boolean }) {
     '/': () => { navigate('/search'); focusSearchInput(); },
     ':': togglePalette,
     '?': toggleHelp,
-    u: () => { void undoLastCapture(); },
   }, {
     scope: 'global', enabled,
     descriptions: {
       'g c': 'go to chat', 'g a': 'go to actions', 'g n': 'go to notes', 'g p': 'go to people',
-      i: 'chat input', '/': 'search', ':': 'command palette', '?': 'help', u: 'undo last capture',
+      i: 'chat input', '/': 'search', ':': 'command palette', '?': 'help',
     },
   });
   useKeys({

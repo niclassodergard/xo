@@ -11,7 +11,7 @@ added, and — always — when a mistake is made (see "Lessons learned" below).
 
 ## Status
 
-- v0.1 prototype in progress. Plan: `docs/plans/2026-11-15-xo-v0.1.md`
+- v0.1 implemented (step 12 done; see below). Plan: `docs/plans/2026-11-15-xo-v0.1.md`
   (the source of truth for v0.1 scope, steps, and acceptance criteria; read
   section 6 "Amendments" — they override older text).
 - **Done and reviewed (2026-11-15):** step 1 (foundation), 2 (auth: password +
@@ -20,7 +20,22 @@ added, and — always — when a mistake is made (see "Lessons learned" below).
   5 (client shell: TUI, keys, router, API client, login, session lock, drafts),
   6 (shared parsing and name matching).
 - **Done and reviewed (2026-11-15, wave C):** step 7 (capture pipeline: classify, ask, file, undo, reclassify), 8 (chat, actions, notes, people, search views), 9 (person + 1-1 meeting views), 10 (voice: push-to-talk, dictation, commands), 11 (Markdown export, Dockerfile, Tailscale deploy docs, README).
-- **Next:** step 12 (integration test, Playwright smoke test, acceptance pass, README key bindings, editor tsconfig, voice `source`, real Docker build where available).
+- **Step 12 (2026-11-15): v0.1 is implemented and verified automatically**: `pnpm typecheck`, `pnpm test` (incl. the full-app integration test: route sweep with encoded/mixed-case paths, locked public route set, CSRF/Origin, cookie attributes, ZDR on/off through a fake fetch, no secrets in responses, capture/undo and 1-1 loops), `pnpm build`, `pnpm e2e` (keyboard-only Chromium flow incl. a 390px voice Send/Discard check with a fake mic). Acceptance criteria (section 8):
+  1. all commands pass, no API key: pass
+  2. setup, login, same error, rate limit: pass (interactive `pnpm xo setup` prompt not run by hand: manual)
+  3. 401 / 403 / cookie attributes: pass
+  4. prefixes file without an LLM call: pass
+  5. LLM classify, undo, reclassify: pass
+  6. unsure / failing / no key asks first: pass
+  7. person linking, unknown and ambiguous names: pass
+  8. 1-1 loop: pass
+  9. keyboard reachability: pass (e2e, zero mouse events); mouse/touch use: manual, not automated
+  10. push-to-talk and voice commands: unit and fake-mic e2e pass; real hold-Space transcription and real mic/Safari: manual
+  11. ZDR on/off, key never leaks (responses, logs, client bundle): pass; Docker image: blocked (no Docker)
+  12. one SQLite file, Markdown export: pass
+  13. `docker build` and run, non-root, `/data`: blocked (Docker not installed)
+  14. monospace, box-drawing, dark, one accent, phone width: pass at 390px in Chromium; use on a real phone: manual
+- **Outstanding manual checks:** `docker build` and run (Docker was not installed; Dockerfile unverified), real OpenRouter classification and transcription (needs the user's OK), push-to-talk on real Chrome/Safari desktop and iOS (incl. the Send/Discard prompt on a real phone), real authenticator app, `tailscale serve` header behaviour (README checklist), audio ZDR enforcement at OpenRouter.
 - Update this section as milestones land.
 
 ## Settled decisions (v0.1, interview of 2026-11-15)
@@ -54,12 +69,12 @@ Keep this list accurate — every command here must work. Needs Node 26 and pnpm
 |---|---|
 | `pnpm install` | Install dependencies |
 | `pnpm dev` | Server (`node --watch`, port 3000) + Vite client (127.0.0.1:5173, strict port); open `http://localhost:5173`. Local `.env` needs `XO_COOKIE_INSECURE=true` and `XO_PUBLIC_ORIGIN=http://localhost:5173`. Use `XO_LLM=fake` for local dev (with `.openrouter-key` present the server otherwise calls OpenRouter for real, which needs the user's OK). Never run Vite with `--host`. |
-| `pnpm typecheck` | `tsc` for server/shared and for the client |
-| `pnpm test` | Vitest (unit + API tests; no network, no API key needed) |
+| `pnpm typecheck` | `tsc` with `tsconfig.server.json` (server, shared, test, config files), `tsconfig.client.json` (client, JSX) and `tsconfig.e2e.json` (`e2e/`, `playwright.config.ts`). The root `tsconfig.json` is solution-style (references only) so editors pick the right config per file |
+| `pnpm test` | Vitest (unit + API tests incl. `test/integration/app.test.ts`, the full-app route sweep; no network, no API key needed) |
 | `pnpm build` | `vite build` (client root `src/client`) into `dist/client` |
 | `pnpm start` | Run the server (serves API + `dist/client`) with Node type stripping |
-| `pnpm e2e` | Playwright smoke test — **available after step 12** (first time: `pnpm exec playwright install chromium`) |
-| `pnpm xo setup [--force]` | Create the single user (password + TOTP) — **functional after step 2** |
+| `pnpm e2e` | Playwright smoke test (keyboard-only, `e2e/smoke.spec.ts`). `e2e/global-setup.ts` runs `pnpm build`, creates a temp DB + user via `setupUser`, starts the real server on a free 127.0.0.1 port with `XO_LLM=fake` (no `.env`, no key), tears it down. First time (or when it warns that no browser was found): `pnpm exec playwright install chromium`. If the bundled browser is missing it uses the newest `chrome-headless-shell` in the Playwright cache (logs which one, warns on a version mismatch); override with `XO_E2E_CHROMIUM=/path/to/chrome`. `XO_E2E_SKIP_BUILD=1` skips the build step. Needs no other server on its port (picked at random) |
+| `pnpm xo setup [--force]` | Create the single user (password + TOTP) |
 | `pnpm xo export [--out <dir>]` | Markdown export (default `./xo-export-YYYYMMDD-HHmmss`; target must be new or empty; dir 0700, files 0600; skips soft-deleted rows) |
 | `docker build -t xo .` | Container image (non-root, `/data` volume, no key inside; supply the key at run time). README has the `docker run` and `tailscale serve` setup (Caddy is an optional alternative). Not yet built locally: Docker was unavailable in step 11 |
 | `docker exec -it xo node src/server/cli/main.ts setup` | Create the user inside a running container (no pnpm in the runtime image) |
@@ -121,7 +136,8 @@ Established in step 1. Every programmer brief must point at this section.
 
 ## Security rules (non-negotiable)
 
-This app holds sensitive CEO data on a public server.
+This app holds sensitive CEO data. It is reachable only over Tailscale, but every
+rule below still applies as defence in depth (treat any tailnet device as untrusted).
 
 - Never commit secrets, API keys, `.env` files, or the database. Data and
   secrets live outside the repo.
@@ -281,6 +297,10 @@ pointed out by the user.
   gated on the session `epoch()` it was mounted in and clears its timers on
   unmount (an orphaned autosave once could save discarded text after
   re-login).
+- **2026-11-15 — "Epoch-guarded on read" isn't "cleared on lock".** A
+  module-level feed of landed captures was filtered by epoch when read but kept
+  in memory through a 401 lock. **Rule:** module-level holders of server data
+  clear on `session === null`, not only on logout.
 - **2026-11-15 — Hiding isn't removing.** The 401 lock first hid the app with
   CSS while its loaded data stayed in the DOM. **Rule:** when access ends,
   unmount or clear server-loaded data; keep only what the user typed.
@@ -306,6 +326,26 @@ pointed out by the user.
   own Esc listener couldn't stop the global Esc, so cancelling a recording also
   navigated back. **Rule:** feature keys are bindings in the key engine with the
   right scope; test that the global binding doesn't also fire.
+- **2026-11-15 — A security sweep can pass vacuously.** The "every route needs
+  auth" test checked the 401 response but not *which* route answered, so a probe
+  path that missed its route passed via the not-found fallback, and a new root
+  GET route would not have been noticed. **Rule:** access-control sweeps assert
+  the answering route, and pin the full set of routes outside the guarded scope.
+- **2026-11-15 — e2e assertions that don't match the UI model.** A textarea
+  body was asserted with `toContainText`, keyboard-activated clicks were counted
+  as mouse use, and keys were pressed before the view had loaded. **Rule:** assert
+  editor contents with `toHaveValue`; filter `detail === 0` clicks when proving
+  keyboard-only; wait for loaded content (e.g. a pane title), not just the URL,
+  before the next key.
+- **2026-11-15 — Port 3000 is taken on the dev Mac** by an unrelated
+  `next-server`. **Rule:** local runs and browser scripts use another port
+  (`XO_PORT`), or check `lsof -iTCP:3000` first.
+- **2026-11-15 — Parallel programmers misattribute test failures.** A failure
+  in another programmer's in-progress file was briefly blamed on the wrong
+  change. **Rule:** in a shared checkout, re-run `pnpm test` before attributing a
+  failure, and name the owning step. To check which tsconfig an editor uses for a
+  file, use tsgo's `updateSnapshot({ openFiles })` + `getDefaultProjectForFile`
+  (example in the step 12b report), not `--showConfig`.
 - **2026-11-15 — "Is it done?" must follow the thing just answered.** Focus
   returned to the chat input only when *no* capture anywhere was pending, so older
   questions stayed live and stray typing answered them. **Rule:** decide focus

@@ -116,3 +116,9 @@ h2, h3 { margin: 0; font-size: inherit; font-weight: normal; }
   .hints { display: none; }
   .tbtn { min-height: 2.4em; min-width: 2.4em; }
 }
+
+/* Voice Send/Discard prompt (2-minute limit): the status line wraps and the prompt gets its own full-width
+   line, so the text and both buttons stay visible at phone width instead of being clipped. */
+.statusbar:has(.voice-confirm) { flex-wrap: wrap; white-space: normal; row-gap: 0.2rem; }
+.statusbar:has(.voice-confirm) .spacer { display: none; }
+.voice-confirm { flex: 1 1 100%; order: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 0.2rem 1ch; white-space: normal; }

@@ -3,7 +3,7 @@ import type { SearchHit } from '../../shared/api.ts';
 import type { Action, Capture, CaptureQuestion } from '../../shared/types.ts';
 import type { CaptureApi } from './chat-logic.ts';
 import {
-  answerForKey, capturesPath, createSendQueue, describeResult, filedTarget, groupActions, hitTarget, historyTexts, loadCaptures,
+  answerForKey, capturesPath, createLandedFeed, createSendQueue, describeResult, filedTarget, groupActions, hitTarget, historyTexts, loadCaptures,
   oldestId, openTarget, prependPage, questionChoices, questionKeys, questionPrompt, questionTarget, recallStep,
   searchTerm, upsertCapture, CAPTURE_PAGE, shortDate,
 } from './chat-logic.ts';
@@ -246,6 +246,50 @@ describe('send queue', () => {
     release(cap(1, { text: 'a' }));
     await first;
     expect(log).toEqual(['sent:a']);
+  });
+});
+
+describe('send queue source', () => {
+  it('each entry carries its own source to send and to onRejected', async () => {
+    const q = createSendQueue(); const seen: string[] = [];
+    q.push('typed'); q.push('spoken', 'voice'); q.push('bad', 'voice');
+    await q.drain(async (t, source) => {
+      seen.push(`${t}:${source}`);
+      if (t === 'bad') throw new Error('400');
+      return cap(1, { text: t });
+    }, {
+      onSent: () => {}, onTransient: () => {}, isTransient: () => false,
+      onRejected: (t, _e, source) => { seen.push(`rejected:${t}:${source}`); },
+    });
+    expect(seen).toEqual(['typed:text', 'spoken:voice', 'bad:voice', 'rejected:bad:voice']);
+  });
+});
+
+describe('landed feed (Chat remount)', () => {
+  it('a send started by one Chat lands in the feed for the next one', async () => {
+    const q = createSendQueue(); const feed = createLandedFeed();
+    let release!: (c: Capture) => void;
+    q.push('slow');
+    const drain = q.drain(() => new Promise<Capture>((r) => { release = r; }), {
+      onSent: (c) => feed.push(c, 1), onRejected: () => {}, onTransient: () => {}, isTransient: () => false,
+    });
+    // the Chat that started the drain unmounts and a new one mounts: nothing to take yet
+    expect(feed.take(1)).toEqual([]);
+    release(cap(7, { text: 'slow' }));
+    await drain;
+    expect(feed.take(1).map((c) => c.id)).toEqual([7]);
+    expect(feed.take(1)).toEqual([]); // consumed once
+  });
+  it('drops entries from an earlier session epoch and on clear', () => {
+    const feed = createLandedFeed();
+    feed.push(cap(1), 1); feed.push(cap(2), 2); feed.push(cap(3), 2);
+    expect(feed.take(2).map((c) => c.id)).toEqual([2, 3]);
+    feed.push(cap(4), 2);
+    feed.clear();
+    expect(feed.take(2)).toEqual([]);
+    feed.push(cap(5), 1);
+    expect(feed.take(2)).toEqual([]);
+    expect(feed.size()).toBe(0);
   });
 });
 

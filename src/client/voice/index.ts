@@ -4,7 +4,7 @@ import { api, ApiError } from '../lib/api.ts';
 import { engine, onKeyUp, registerCommand } from '../lib/keys.ts';
 import { navigate, route } from '../lib/router.ts';
 import {
-  chatDraft, epoch, flash, focusChatInput, overlay, people, personPicker, promptRequest, session,
+  appendVoiceDraft, chatDraft, epoch, flash, focusChatInput, overlay, people, personPicker, promptRequest, session,
 } from '../lib/store.ts';
 import type { MeetingDetail } from '../../shared/types.ts';
 import { createVoiceController } from './controller.ts';
@@ -44,7 +44,7 @@ function getController(): VoiceController {
     failureOf: (e) => (e instanceof ApiError ? { status: e.status, code: e.code, retryAfter: e.retryAfter } : null),
     dictate(text) {
       const fit = fitDraft(chatDraft.value, text);
-      chatDraft.value = fit.draft;
+      appendVoiceDraft(fit.draft);
       if (fit.truncated) flash(`Dictation cut at ${LIMITS.captureText} characters.`, 'error');
       if (overlayOpen()) { // never navigate or steal focus from an open overlay
         if (!fit.truncated) flash('Dictation added to chat');

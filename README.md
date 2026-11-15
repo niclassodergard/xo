@@ -164,22 +164,58 @@ docker exec xo rm -rf /tmp/xo-export
 
 ## Using XO
 
-Press `?` for the help overlay, which lists the bindings registered in the current view. Modes: NORMAL (keys are commands), INSERT (typing in an input; `Esc` returns), COMMAND (palette).
+Press `?` for the help overlay, which lists the bindings of the current view (it is generated from the registered bindings and is authoritative). Modes, shown at the left of the status line:
 
-### Global key bindings
+- **NORMAL**: keys are commands.
+- **INSERT**: you are typing in an input; only `Esc`, `Ctrl-K` and `Alt+Space` act as commands. `Esc` returns to NORMAL.
+- **COMMAND**: the palette or another overlay is open.
+
+Everything is reachable by keyboard; the same actions also work by mouse or touch (list rows and buttons).
+
+### Global key bindings (NORMAL mode unless noted)
 
 | Key | Action |
 |---|---|
 | `g c` / `g a` / `g n` / `g p` | Go to chat / actions / notes / people |
-| `i` | Chat input |
+| `i` | Go to chat and focus the input |
 | `/` | Search |
-| `:` or `Ctrl-K` (any mode) | Command palette |
-| `?` | Help |
-| `u` | Undo the most recent filed capture |
-| `j` / `k`, `g g`, `Shift+G`, `Enter` | Move in lists, top, bottom, open |
-| `Esc` | Close overlay / leave input / go back |
+| `:` | Command palette |
+| `Ctrl-K` (any mode) | Command palette |
+| `?` | Help overlay |
+| `u` | Not global. Chat: undo the selected, filed capture. Person: undo the last done/drop shown by its undo offer. Elsewhere it does nothing. The palette command "Undo last capture" undoes the most recent filed capture from any view |
+| `j` / `k` (or arrows), `g g`, `Shift+G`, `Enter` | In lists: move, top, bottom, open |
+| `Esc` | Close overlay, leave the input (to NORMAL), or go back |
+| hold `Space` | Push-to-talk (see Voice) |
+| `Alt+Space` (any mode) | Push-to-talk |
 
-View-specific keys (TBD: documented per view by steps 8 and 9; the `?` overlay is authoritative): actions (`x` done, `e` edit, `d d` delete, `a` add, `t` show done), notes (`e`, `d d`, `a`), people (`a` add, `s` start 1-1), person and meeting views (`a` add agenda item, `x` check, `t` / `T` follow-up for me / them, `n` notes, `Tab` panes, `E` end meeting). Hold `Space` (NORMAL) or `Alt+Space` (any mode) to talk (TBD: step 10).
+The palette (`:`) also has: go to each view, "Start 1-1 with…" (person picker), "New person", "Undo last capture", "Dictate (start/stop microphone)", "Help" and "Log out". Type to filter, `Enter` runs, `Esc` closes.
+
+### Chat
+
+Chat is the home view and always opens with the input focused (INSERT). `Enter` sends, `Up`/`Down` recall earlier texts, `Esc` leaves the input.
+
+**Focus rule for questions.** When XO asks a question (what kind is this, unknown person, which person, which person for an agenda item), the input keeps focus so typing is never swallowed. To answer, press `Esc` first (NORMAL mode), then the option key shown on the question (`n` note, `t` action, `a` agenda, `d` discard, `c` create person, `p` pick a person, `s` skip, `1`..`9` for candidates). After an answer, focus returns to the input, unless the same capture asks a follow-up question. Pressing option keys while still in the input just types them.
+
+| Key | Action |
+|---|---|
+| `j` / `k`, `g g`, `Shift+G` | Select a capture / first / newest |
+| `Enter` | Open the filed item (note, person, or the actions list) |
+| `u` / `r` | Undo / reclassify the selected, filed capture |
+| `o` | Load older captures (when offered) |
+
+### Other views
+
+| View | Keys |
+|---|---|
+| Actions (mine / waiting for) | `x` done, `e` edit, `d d` delete, `a` add (mine), `Shift+A` add (waiting for), `t` show or hide done, `Enter` open the person, `o` load more |
+| Notes | `Enter` open, `a` new note, `d d` delete, `o` load more |
+| Note | `e` edit body, `t` edit title, `Esc` save and leave the field, `Ctrl-Enter` save, `p` open the person, `d d` delete, `q` back |
+| People | `Enter` open, `a` add person, `s` start 1-1 |
+| Search | The input is focused on entry; type at least 2 characters, `Enter` searches and moves to the results, then `j`/`k` and `Enter` open a hit; `Esc` leaves the input |
+| Person | `Tab` / `Shift+Tab` panes, `a` add agenda item, `x` done / `Shift+X` drop an agenda item (undo with `u`), `x` complete an action (in the actions pane), `s` start or resume a 1-1, `e` edit name and aliases, `n` edit person notes, `m` load older notes or meetings, `d d` delete an agenda item, `Enter` open a note or past meeting |
+| 1-1 meeting | `j` / `k` move, `x` check or uncheck an agenda item or follow-up, `a` add agenda item, `t` follow-up for me, `Shift+T` follow-up for them, `n` edit the meeting notes (autosaved every few seconds, and on `Esc` or blur), `Tab` / `Shift+Tab` panes, `d d` delete, `Shift+E` end the meeting (confirm with `y`, cancel with `n` or `Esc`), `Esc` back to the person. An ended meeting is read-only. |
+
+Unchecked agenda items stay open and appear in the next 1-1 together with the previous meeting's notes, resolved items and follow-ups.
 
 ### Prefix commands (chat)
 
@@ -189,16 +225,23 @@ View-specific keys (TBD: documented per view by steps 8 and 9; the `?` overlay i
 | `/todo` (`/t`, `/action`) | Action owned by me |
 | `/wait` (`/w`) | Action owned by them |
 | `/agenda` (`/a`) | 1-1 agenda item (needs a person) |
-| `@name` or `@"Full Name"` | Link a person (the first mention is used). Unknown names ask before creating a person |
+| `@name` or `@"Full Name"` | Link a person (the first mention is used; the `@` is dropped from the text). Unknown names ask before creating a person |
 
-A prefix skips the classifier. Without one, the classifier decides; when unsure, it fails or no key is set, XO asks you with a keyboard-selectable question and files nothing until you answer. Known names and aliases in the text link automatically (name must start with an uppercase letter in free text). `u` undoes, `r` reclassifies.
+A prefix skips the classifier. Without one, the classifier decides; when it is unsure, fails or no key is set, XO asks you with a keyboard-selectable question and files nothing until you answer. Known names and aliases in the text link automatically (in free text a name must start with an uppercase letter). `u` undoes, `r` reclassifies.
 
-### Voice commands
+### Voice
 
-Dictation goes into the chat input; press `Enter` to file it. Short transcripts that match a command run immediately (case-insensitive, trailing punctuation and "please" ignored; the person must match exactly one known person, otherwise the text is dictation):
+Push-to-talk needs a microphone and, in a browser, a secure origin (`https://` or localhost). **Dictated audio leaves your machine**: it is uploaded to the server and sent to OpenRouter for transcription. Whether the provider may retain it depends on `XO_OPENROUTER_ZDR`, see [Data retention at OpenRouter](#data-retention-at-openrouter-xo_openrouter_zdr).
+
+- **Hold `Space`** (NORMAL mode) or **`Alt+Space`** (any mode) to record; release to transcribe. A held-key recording is sent automatically at 120 seconds.
+- The **mic button** in the status line and the palette command "Dictate" toggle recording instead (the way to talk on a phone). Such a recording that reaches the 2-minute limit is **not** sent automatically: the status line asks **Send (Enter) / Discard (Esc)**, and discards the audio after 60 seconds without a choice, or when the tab is hidden or loses focus.
+- `Esc` while recording or transcribing cancels. Recordings shorter than about 300 ms are ignored.
+- A transcript that matches a command runs it. Anything else is appended to the chat input; check it and press `Enter` to file it (such captures are stored with source `voice`).
+
+Commands (case-insensitive, trailing punctuation and "please" ignored; the person must match exactly one known person, otherwise the text is dictation):
 
 | Say | Does |
 |---|---|
 | "open Anna", "show Anna" | Open the person |
 | "start 1-1 with Anna" (also "one on one", "1:1", "meeting") | Start (or resume) a 1-1 |
-| "go to chat / actions / notes / people" | Switch view |
+| "go to chat / actions / notes / people" (also "open ...") | Switch view |

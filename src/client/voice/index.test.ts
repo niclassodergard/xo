@@ -17,7 +17,7 @@ const { initVoice } = await import('./index.ts');
 const { startRecording } = await import('./recorder.ts');
 const { api } = await import('../lib/api.ts');
 const { engine, installKeyListeners, mode, registerCommand: _r } = await import('../lib/keys.ts');
-const { flash: _f, session, chatDraft, flashMessage } = await import('../lib/store.ts');
+const { flash: _f, session, chatDraft, chatDraftSource, flashMessage } = await import('../lib/store.ts');
 void _r; void _f;
 
 let win: FakeWindow;
@@ -76,6 +76,7 @@ describe('initVoice key wiring', () => {
     expect(rec.stop).toHaveBeenCalledTimes(1);
     expect(api.postAudio).toHaveBeenCalledTimes(1);
     expect(chatDraft.value).toBe('hello');
+    expect(chatDraftSource.value).toBe('voice');
   });
 
   it('Space does nothing in INSERT mode, Alt+Space works in any mode', async () => {

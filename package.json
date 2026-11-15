@@ -10,7 +10,7 @@
     "dev": "pnpm run --parallel \"/^dev:.*/\"",
     "dev:server": "node --watch --env-file-if-exists=.env src/server/main.ts",
     "dev:client": "vite",
-    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.client.json",
+    "typecheck": "tsc -p tsconfig.server.json && tsc -p tsconfig.client.json && tsc -p tsconfig.e2e.json",
     "test": "vitest run",
     "build": "vite build",
     "start": "node --env-file-if-exists=.env src/server/main.ts",

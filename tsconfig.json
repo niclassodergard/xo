@@ -1,18 +1,4 @@
 {
-  "compilerOptions": {
-    "target": "es2023",
-    "lib": ["es2023"],
-    "module": "nodenext",
-    "moduleResolution": "nodenext",
-    "types": ["node"],
-    "strict": true,
-    "noEmit": true,
-    "allowImportingTsExtensions": true,
-    "erasableSyntaxOnly": true,
-    "verbatimModuleSyntax": true,
-    "noUncheckedIndexedAccess": true,
-    "skipLibCheck": true,
-    "isolatedModules": true
-  },
-  "include": ["src/server/**/*.ts", "src/shared/**/*.ts", "test/**/*.ts", "vite.config.ts", "vitest.config.ts"]
+  "files": [],
+  "references": [{ "path": "./tsconfig.server.json" }, { "path": "./tsconfig.client.json" }, { "path": "./tsconfig.e2e.json" }]
 }

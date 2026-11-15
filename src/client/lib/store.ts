@@ -1,4 +1,4 @@
-import { effect, signal } from '@preact/signals';
+import { computed, effect, signal } from '@preact/signals';
 import type { Signal } from '@preact/signals';
 import { useLayoutEffect } from 'preact/hooks';
 import type { Capture, Person } from '../../shared/types.ts';
@@ -41,6 +41,43 @@ export const shellActive: Signal<boolean> = signal(false);
 export const people: Signal<Person[]> = signal<Person[]>([]);
 /** Chat input text (voice dictation writes here). */
 export const chatDraft: Signal<string> = signal('');
+/**
+ * How many characters of `chatDraft` came from voice dictation. Only the voice module adds to it
+ * (`appendVoiceDraft`); typing calls `editChatDraft`, which caps it at the new length. It resets when the
+ * draft becomes empty (send, logout). A 401 keeps it, like the draft itself.
+ */
+const chatVoiceChars: Signal<number> = signal(0);
+/**
+ * Where the current chat draft came from, sent as the capture `source`. RULE: a dictated draft that is
+ * edited by typing stays 'voice' while more than half of its characters are still dictated; typing a lot
+ * (or recalling history) turns it into 'text'. Fixing a misheard word keeps 'voice'.
+ */
+export const chatDraftSource: Signal<'text' | 'voice'> = computed(() => (chatVoiceChars.value * 2 > chatDraft.value.length ? 'voice' : 'text'));
+/** The user typed in (or recalled text into) the chat input. `recalled` = the text did not come from this draft. */
+export function editChatDraft(value: string, recalled = false): void {
+  chatDraft.value = value;
+  chatVoiceChars.value = recalled ? 0 : Math.min(chatVoiceChars.peek(), value.length);
+}
+/** Voice dictation appended to the draft: `next` is the new draft, the characters added are counted as voice. */
+export function appendVoiceDraft(next: string): void {
+  const before = chatDraft.peek().length;
+  chatDraft.value = next;
+  const added = Math.max(0, next.length - before);
+  chatVoiceChars.value = Math.min(chatVoiceChars.peek() + added, next.length);
+}
+/** Put back text that was never sent, keeping its source. */
+export function restoreChatDraft(text: string, source: 'text' | 'voice'): void {
+  chatDraft.value = text;
+  chatVoiceChars.value = source === 'voice' ? text.length : 0;
+}
+/** Put unsent text in front of what the user has typed since, counting it as voice when it was dictated. */
+export function prependChatDraft(text: string, source: 'text' | 'voice'): void {
+  const cur = chatDraft.peek();
+  const next = cur ? `${text} ${cur}` : text;
+  const voice = chatVoiceChars.peek() + (source === 'voice' ? text.length : 0);
+  chatDraft.value = next;
+  chatVoiceChars.value = Math.min(voice, next.length);
+}
 /** Search input text; kept in client state so it never lands in the URL. */
 export const searchQuery: Signal<string> = signal('');
 /** Unsaved TextEdit text by editor id. Survives a 401 (views unmount); wiped by logout(). */
@@ -123,6 +160,7 @@ function closeAllOverlays(): void {
 }
 
 effect(() => { if (session.value) shellActive.value = true; });
+effect(() => { if (chatDraft.value === '') chatVoiceChars.value = 0; });
 
 // Session ended (401, logout, other tab): invalidate in-flight loads, hide data, close overlays.
 // Drafts are kept here on purpose (see convention 2); logout() wipes them.
