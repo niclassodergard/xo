@@ -1,0 +1,52 @@
+/* Conversation stream and composer. Tokens only. Selectors start at .chat-inner so they win over shell.css
+   whatever the order the bundler loads the files in. */
+
+.chat-inner .stream { padding: var(--s5) var(--s4); padding-top: calc(var(--s5) + env(safe-area-inset-top)); }
+.chat-inner .stream:focus { outline: none; }
+.chat-inner .stream:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.stream-inner { display: flex; flex-direction: column; gap: var(--s5); min-height: 100%; justify-content: flex-end; }
+.stream-note { text-align: center; padding: var(--s5) var(--s3); }
+.load-older { align-self: center; }
+
+.turn { display: flex; flex-direction: column; gap: var(--s2); padding: var(--s2); border-radius: var(--radius); }
+.turn.selected { background: var(--bg-selected); }
+.turn.queued { opacity: 0.8; }
+
+.msg { max-width: 100%; min-width: 0; }
+.msg-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.msg-meta { display: block; margin-top: var(--s1); color: var(--fg-muted); font-size: 0.8em; }
+.msg.user {
+  align-self: flex-end; max-width: min(85%, 560px);
+  background: var(--bg-raised); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--s2) var(--s3);
+}
+.msg.xo { align-self: flex-start; width: 100%; }
+.msg.xo.busy { opacity: 0.6; }
+.msg.xo.tone-undone .msg-text, .msg.xo.tone-discarded .msg-text, .msg.xo.tone-deleted .msg-text { color: var(--fg-muted); }
+.msg.xo.tone-pending .msg-text, .msg.xo.tone-ready .msg-text { font-weight: 600; }
+.msg.xo.tone-asking .msg-text, .msg.xo.tone-asked .msg-text, .msg.xo.tone-nomatch .msg-text, .msg.xo.tone-removed .msg-text { color: var(--fg-muted); }
+.msg.xo.tone-asking .msg-text { font-style: italic; }
+.msg.xo.tone-failed .msg-text { color: var(--danger); }
+.msg.xo.tone-answer .msg-text { line-height: var(--leading); }
+.answer-sources { align-items: center; }
+.answer-sources-label { font-size: 0.85em; }
+.answer-sources .chip { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msg-link { color: var(--accent); }
+.turn-chips { display: flex; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s2); }
+
+/* ---- composer ---- */
+.chat-inner .composer {
+  flex: 0 0 auto; display: flex; flex-direction: column; align-items: stretch; gap: var(--s1);
+  padding: var(--s3) var(--s4); padding-bottom: calc(var(--s3) + env(safe-area-inset-bottom));
+}
+.composer-row { display: flex; align-items: flex-end; gap: var(--s2); }
+.composer .composer-input { flex: 1 1 auto; min-width: 0; resize: none; border-radius: var(--radius); line-height: var(--leading); }
+.composer-send { flex: 0 0 auto; min-height: 44px; }
+.composer-meta { display: flex; justify-content: space-between; gap: var(--s3); min-height: 1.4em; }
+.composer-meta .hint { font-family: var(--mono); font-size: 0.75em; }
+.composer-meta .counter.over { color: var(--danger); }
+
+@media (max-width: 899.98px) {
+  .chat-inner .stream { padding-left: var(--s3); padding-right: var(--s3); }
+  .chat-inner .composer { padding-left: var(--s3); padding-right: var(--s3); }
+  .composer-meta .hint { white-space: normal; }
+}

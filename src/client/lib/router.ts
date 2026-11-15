@@ -1,13 +1,17 @@
 import { signal } from '@preact/signals';
 import type { Signal } from '@preact/signals';
 
-// Hash router: #/chat, #/actions, #/notes, #/notes/:id, #/people, #/people/:id, #/meetings/:id, #/search.
-// There is no query string: search text lives in client state (store.searchQuery), never in the URL.
+// Hash router: #/ (home), #/actions, #/notes, #/people, #/projects, and #/notes/:id, #/people/:id,
+// #/projects/:id, #/meetings/:id. Legacy #/chat and #/search map to home. There is no query string:
+// search text lives in client state, never in the URL.
 
-export interface Route { name: string; params: Record<string, string> }
+export type RouteName =
+  'home' | 'actions' | 'notes' | 'note' | 'people' | 'person' | 'projects' | 'project' | 'meeting' | 'notfound';
+export interface Route { name: RouteName; params: Record<string, string> }
 
 const ID = /^\d{1,15}$/;
-const TOP = new Set(['chat', 'actions', 'notes', 'people', 'search']);
+const LISTS = new Set(['actions', 'notes', 'people', 'projects']);
+const DETAIL: Record<string, RouteName> = { notes: 'note', people: 'person', projects: 'project', meetings: 'meeting' };
 
 function decode(s: string): string | null {
   try { return decodeURIComponent(s); } catch { return null; }
@@ -20,41 +24,54 @@ export function parseRoute(input: string): Route {
   const notFound: Route = { name: 'notfound', params: {} };
   if (segs.some((x) => x === null)) return notFound;
   const [a, b, ...rest] = segs as string[];
-  if (a === undefined) return { name: 'chat', params: {} };
+  if (a === undefined) return { name: 'home', params: {} };
   if (rest.length > 0) return notFound;
-  if (b === undefined) return TOP.has(a) ? { name: a, params: {} } : notFound;
-  // Ids are validated here so views can put them into API paths safely.
-  if (!ID.test(b)) return notFound;
-  if (a === 'notes') return { name: 'note', params: { id: b } };
-  if (a === 'people') return { name: 'person', params: { id: b } };
-  if (a === 'meetings') return { name: 'meeting', params: { id: b } };
-  return notFound;
+  if (b === undefined) {
+    if (a === 'chat' || a === 'search') return { name: 'home', params: {} };
+    return LISTS.has(a) ? { name: a as RouteName, params: {} } : notFound;
+  }
+  // Ids are validated here so documents can put them into API paths safely.
+  const detail = DETAIL[a];
+  if (!detail || !ID.test(b)) return notFound;
+  return { name: detail, params: { id: b } };
 }
 
-const BASE: Record<string, string> = {
-  chat: '/chat', actions: '/actions', notes: '/notes', people: '/people', search: '/search',
-  note: '/notes', person: '/people', meeting: '/meetings',
+const BASE: Partial<Record<RouteName, string>> = {
+  actions: '/actions', notes: '/notes', people: '/people', projects: '/projects',
+  note: '/notes', person: '/people', project: '/projects', meeting: '/meetings',
 };
 
 /** Path (without '#') for a route; the inverse of parseRoute. */
-export function formatRoute(r: { name: string; params?: Record<string, string> }): string {
-  const base = BASE[r.name] ?? '/chat';
-  const id = r.params?.id;
+export function formatRoute(r: { name: RouteName; params?: Record<string, string> }): string {
+  const base = BASE[r.name];
+  if (base === undefined) return '/';
+  const id = r.params?.['id'];
   return id !== undefined ? `${base}/${encodeURIComponent(id)}` : base;
 }
 
-const PARENT: Record<string, string> = { note: '/notes', person: '/people', meeting: '/people' };
+const PARENT: Partial<Record<RouteName, string>> = { note: '/notes', person: '/people', project: '/projects', meeting: '/people' };
 
+/** The list a document belongs to, or home. */
 export function parentPath(r: Route): string {
-  return PARENT[r.name] ?? '/chat';
+  return PARENT[r.name] ?? '/';
 }
 
-/** back() uses history only when this app pushed an entry (depth > 0); otherwise it goes to the parent view. */
+/** True when the route shows a document in the panel. */
+export function isPanelRoute(r: Route): boolean {
+  return r.name !== 'home';
+}
+
+/** back() uses history only when this app pushed an entry (depth > 0); otherwise it goes to the parent list. */
 export function backAction(depth: number): 'history' | 'parent' {
   return depth > 0 ? 'history' : 'parent';
 }
 
 const hasWindow = typeof window !== 'undefined' && typeof window.location !== 'undefined';
+
+function prevOf(state: unknown): string | null {
+  const p = (state as { prev?: unknown } | null)?.prev;
+  return typeof p === 'string' ? p : null;
+}
 
 function depthOf(state: unknown): number {
   const d = (state as { depth?: unknown } | null)?.depth;
@@ -76,13 +93,13 @@ if (hasWindow) {
 export function navigate(path: string, opts: { replace?: boolean } = {}): void {
   const p = path.startsWith('/') ? path : `/${path}`;
   const parsed = parseRoute(p);
-  const canonical = formatRoute(parsed.name === 'notfound' ? { name: 'chat' } : parsed);
+  const canonical = formatRoute(parsed.name === 'notfound' ? { name: 'home' } : parsed);
   if (!hasWindow) { route.value = parseRoute(canonical); return; }
   const hash = `#${canonical}`;
   if (window.location.hash !== hash) {
     const depth = depthOf(window.history.state);
-    if (opts.replace) window.history.replaceState({ depth }, '', hash);
-    else window.history.pushState({ depth: depth + 1 }, '', hash);
+    if (opts.replace) window.history.replaceState({ depth, prev: prevOf(window.history.state) }, '', hash);
+    else window.history.pushState({ depth: depth + 1, prev: formatRoute(route.value) }, '', hash);
   }
   route.value = parseRoute(canonical);
 }
@@ -90,4 +107,19 @@ export function navigate(path: string, opts: { replace?: boolean } = {}): void {
 export function back(): void {
   if (hasWindow && backAction(depthOf(window.history.state)) === 'history') window.history.back();
   else navigate(parentPath(route.value), { replace: true });
+}
+
+/** What closing the panel does for a given history state: go back when the entry just left was home, else replace. */
+export function closeAction(state: unknown): 'history' | 'replace' {
+  return depthOf(state) > 0 && prevOf(state) === '/' ? 'history' : 'replace';
+}
+
+/**
+ * Close the open document (Esc, Close button). When the entry just left is home (stored in the pushed history
+ * state) it uses history.back(); otherwise it replaces the current entry with home. Either way browser Back
+ * never reopens the closed document.
+ */
+export function closePanel(): void {
+  if (hasWindow && closeAction(window.history.state) === 'history') window.history.back();
+  else navigate('/', { replace: true });
 }

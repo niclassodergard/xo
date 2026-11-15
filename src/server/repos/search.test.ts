@@ -6,6 +6,7 @@ import { createAgendaItem, softDeleteAgendaItem } from './agenda.ts';
 import { startMeeting, updateMeetingNotes } from './meetings.ts';
 import { createNote, softDeleteNote } from './notes.ts';
 import { createPerson, updatePerson } from './people.ts';
+import { createProject, softDeleteProject } from './projects.ts';
 import { fold, search } from './search.ts';
 
 const T = new Date('2026-01-01T10:00:00.000Z');
@@ -139,3 +140,43 @@ describe('search', () => {
   });
 });
 
+describe('search projects', () => {
+  it('finds a project by title, alias and description, with Unicode case folding', () => {
+    const p = createProject(db, { title: 'Åre-resa', aliases: ['Skidtur'], descriptionMd: 'Boka stugan i januari' }, T);
+    expect(search(db, 'åre')).toMatchObject([{ kind: 'project', id: p.id, title: 'Åre-resa', personId: null, archived: false }]);
+    expect(search(db, 'ÅRE')[0]?.id).toBe(p.id);
+    expect(search(db, 'skidtur')).toMatchObject([{ kind: 'project', id: p.id, snippet: 'Skidtur' }]);
+    const d = search(db, 'STUGAN');
+    expect(d).toMatchObject([{ kind: 'project', id: p.id }]);
+    expect(d[0]?.snippet).toContain('stugan');
+  });
+
+  it('does not match alias JSON syntax, and never returns a deleted project', () => {
+    const p = createProject(db, { title: 'Apollo', aliases: ['Moon'] }, T);
+    expect(search(db, '["')).toEqual([]);
+    expect(search(db, 'aliases')).toEqual([]);
+    expect(search(db, 'moon')).toHaveLength(1);
+    softDeleteProject(db, p.id, T);
+    expect(search(db, 'apollo')).toEqual([]);
+    expect(search(db, 'moon')).toEqual([]);
+  });
+
+  it('gives projects a fair share so notes cannot crowd them out', () => {
+    for (let i = 0; i < 30; i++) createNote(db, { title: `budget ${i}`, bodyMd: 'budget' }, T);
+    const p = createProject(db, { title: 'Budget project' }, T);
+    const r = search(db, 'budget', 12);
+    expect(r).toHaveLength(12);
+    expect(r.some((h) => h.kind === 'project' && h.id === p.id)).toBe(true);
+  });
+
+  it('JSON-syntax-only matches do not use up the limit', () => {
+    // '", "' occurs in the stored alias JSON of two-alias rows, never in a real alias.
+    for (let i = 0; i < 5; i++) createProject(db, { title: `A${i}`, aliases: ['x', 'y'] }, T);
+    for (let i = 0; i < 5; i++) createPerson(db, { name: `A${i}`, aliases: ['x', 'y'] }, T);
+    const real = createProject(db, { title: 'Zed', descriptionMd: 'say ", " here' }, T);
+    const realPerson = createPerson(db, { name: 'Zed, "Zed" ", "', aliases: [] }, T);
+    const r = search(db, '", "', 3);
+    expect(r.map((h) => `${h.kind}:${h.id}`)).toEqual(expect.arrayContaining([`project:${real.id}`, `person:${realPerson.id}`]));
+    expect(r.filter((h) => h.kind === 'project' || h.kind === 'person')).toHaveLength(2);
+  });
+});

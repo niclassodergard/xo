@@ -3,7 +3,7 @@ import type { SearchHit } from '../../shared/api.ts';
 import type { ItemKind } from '../../shared/types.ts';
 
 const SNIPPET_RADIUS = 40;
-const KIND_COUNT = 5;
+const KIND_COUNT = 6;
 
 /**
  * NFC + lower-case; Unicode-aware, unlike SQLite's own LIKE which only folds ASCII. The only
@@ -68,9 +68,9 @@ function oneLine(text: string, max = 80): string {
 interface Row { id: number; a: string; b: string; person_id: number | null; c?: string | null; archived_at?: string | null }
 
 /**
- * Substring search over people, meeting notes, notes, actions and agenda items (in that order).
+ * Substring search over people, projects, meeting notes, notes, actions and agenda items (in that order).
  * Soft-deleted rows are excluded; archived people stay searchable and are marked `archived`.
- * Each kind gets a fair share of ceil(limit/5) slots first; unused slots go to the earlier kinds
+ * Each kind gets a fair share of ceil(limit/6) slots first; unused slots go to the earlier kinds
  * that have more matches, so one kind cannot crowd out the others.
  */
 export function search(db: DatabaseSync, q: string, limit = 50): SearchHit[] {
@@ -80,7 +80,7 @@ export function search(db: DatabaseSync, q: string, limit = 50): SearchHit[] {
   const foldedTerm = fold(term);
   const pat = likePattern(foldedTerm);
 
-  const hit = (kind: ItemKind | 'person' | 'meeting', r: Row, title: string, snip: string, archived = false): SearchHit => ({
+  const hit = (kind: ItemKind | 'person' | 'meeting' | 'project', r: Row, title: string, snip: string, archived = false): SearchHit => ({
     kind, id: r.id, title, snippet: snip, personId: r.person_id, archived,
   });
   const text = (r: Row, ...candidates: string[]): string => {
@@ -97,9 +97,9 @@ export function search(db: DatabaseSync, q: string, limit = 50): SearchHit[] {
     .prepare(
       `SELECT id, name AS a, aliases AS b, id AS person_id, archived_at FROM people
        WHERE xo_fold(name) LIKE ?1 ESCAPE '\\' OR xo_fold(aliases) LIKE ?1 ESCAPE '\\'
-       ORDER BY xo_fold(name), id LIMIT ?2`,
+       ORDER BY xo_fold(name), id`, // no SQL LIMIT: JSON-syntax-only matches are dropped below, then the list is cut
     )
-    .all(pat, limit) as unknown as Row[];
+    .all(pat) as unknown as Row[];
   for (const r of peopleRows) {
     let aliases: string[] = [];
     try {
@@ -113,6 +113,35 @@ export function search(db: DatabaseSync, q: string, limit = 50): SearchHit[] {
       if (alias !== undefined) people.push(hit('person', r, r.a, alias, archived));
     }
   }
+
+  const projects: SearchHit[] = [];
+  const projectRows = db
+    .prepare(
+      `SELECT id, title AS a, aliases AS b, description_md AS c, NULL AS person_id FROM projects
+       WHERE deleted_at IS NULL AND (xo_fold(title) LIKE ?1 ESCAPE '\\' OR xo_fold(aliases) LIKE ?1 ESCAPE '\\'
+         OR xo_fold(description_md) LIKE ?1 ESCAPE '\\')
+       ORDER BY xo_fold(title), id`,
+    )
+    .all(pat) as unknown as Row[];
+  for (const r of projectRows) {
+    let aliases: string[] = [];
+    try {
+      const v: unknown = JSON.parse(r.b);
+      if (Array.isArray(v)) aliases = v.filter((x): x is string => typeof x === 'string');
+    } catch { /* ignore malformed */ }
+    const alias = aliases.find((x) => fold(x).includes(foldedTerm));
+    const inTitle = fold(r.a).includes(foldedTerm);
+    const desc = r.c ?? '';
+    if (inTitle) projects.push(hit('project', r, r.a, aliases.join(', ') || (snippet(desc, foldedTerm) ?? prefix(desc))));
+    else if (alias !== undefined) projects.push(hit('project', r, r.a, alias));
+    else {
+      const s = snippet(desc, foldedTerm); // a JSON-syntax-only match yields no snippet: not a hit
+      if (s !== null) projects.push(hit('project', r, r.a, s));
+    }
+  }
+
+  people.length = Math.min(people.length, limit);
+  projects.length = Math.min(projects.length, limit);
 
   const meetings = (
     db
@@ -152,7 +181,7 @@ export function search(db: DatabaseSync, q: string, limit = 50): SearchHit[] {
       .all(pat, limit) as unknown as Row[]
   ).map((r) => hit('agenda', r, oneLine(r.a), text(r, r.a)));
 
-  const groups = [people, meetings, notes, actions, agenda];
+  const groups = [people, projects, meetings, notes, actions, agenda];
   const share = Math.ceil(limit / KIND_COUNT);
   const take = groups.map((g) => Math.min(g.length, share));
   let spare = limit - take.reduce((a, b) => a + b, 0);

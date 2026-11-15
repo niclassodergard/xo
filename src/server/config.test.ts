@@ -22,6 +22,7 @@ describe('loadConfig defaults', () => {
     expect(c.sessionIdleDays).toBe(7);
     expect(c.llmModel).toBe('anthropic/claude-haiku-4.5');
     expect(c.sttModel).toBe('openai/whisper-1');
+    expect(c.qaModel).toBe('anthropic/claude-sonnet-5.5');
     expect(c.classifyThreshold).toBe(0.8);
     expect(c.llm).toBe('openrouter');
     expect(c.openRouterZdr).toBe(false);
@@ -193,12 +194,14 @@ describe('OpenRouter ZDR and model slugs', () => {
   it('accepts vendor/name slugs', () => {
     const { config } = load({ XO_LLM_MODEL: 'google/gemini-2.5-flash', XO_STT_MODEL: 'openai/whisper-large-v3' });
     expect(config.llmModel).toBe('google/gemini-2.5-flash');
+    expect(load({ XO_QA_MODEL: 'anthropic/claude-sonnet-4.6' }).config.qaModel).toBe('anthropic/claude-sonnet-4.6');
   });
 
   it('rejects variant suffixes and malformed slugs', () => {
     for (const bad of ['anthropic/claude-haiku-4.5:online', 'noslash', 'a/b/c', '/x', 'a b/c']) {
       expect(() => load({ XO_LLM_MODEL: bad })).toThrow(/XO_LLM_MODEL/);
       expect(() => load({ XO_STT_MODEL: bad })).toThrow(/XO_STT_MODEL/);
+      expect(() => load({ XO_QA_MODEL: bad })).toThrow(/XO_QA_MODEL/);
     }
   });
 });

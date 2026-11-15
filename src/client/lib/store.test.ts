@@ -1,9 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  appPhase, appendVoiceDraft, chatDraft, chatStash, takeChatStash, chatDraftSource, editChatDraft, prependChatDraft, restoreChatDraft, clearDraft, drafts, epoch, flashMessage, logout, overlay, people, personPicker, promptRequest,
+  appPhase, appendVoiceDraft, chatDraft, chatStash, takeChatStash, chatDraftSource, editChatDraft, prependChatDraft, restoreChatDraft, clearDraft, drafts, epoch, flashMessage, logout, overlay, people, pickRequest, promptRequest, confirmRequest, projects, nav, refreshProjects, personName, projectTitle, toggleHelp, askConfirm,
   refreshPeople, searchQuery, session, setDraft, shellActive, syncDraft, togglePalette,
 } from './store.ts';
-import { mode } from './keys.ts';
 import { createDraftSaver } from './draft-saver.ts';
 import type { Flash } from './store.ts';
 import { api } from './api.ts';
@@ -88,21 +87,66 @@ describe('401 keeps drafts and invalidates late responses', () => {
 });
 
 describe('overlay stacking', () => {
-  afterEach(() => { overlay.value = null; personPicker.value = null; promptRequest.value = null; mode.value = 'normal'; });
+  afterEach(() => { overlay.value = null; pickRequest.value = null; promptRequest.value = null; confirmRequest.value = null; });
 
-  it('Ctrl-K / ":" is a no-op while a Prompt or person picker is open', () => {
+  it('Cmd-K and the Shortcuts key are no-ops while a Prompt, picker or confirm is open', () => {
     promptRequest.value = { label: 'New person', onSubmit: () => {} };
     togglePalette();
+    toggleHelp();
     expect(overlay.value).toBeNull();
-    expect(mode.value).toBe('normal');
     promptRequest.value = null;
-    personPicker.value = { onPick: () => {} };
+    pickRequest.value = { kind: 'person', onPick: () => {} };
     togglePalette();
     expect(overlay.value).toBeNull();
-    personPicker.value = null;
+    pickRequest.value = null;
+    askConfirm('Delete?', () => {});
+    expect(confirmRequest.value?.message).toBe('Delete?');
+    togglePalette();
+    expect(overlay.value).toBeNull();
+    confirmRequest.value = null;
     togglePalette();
     expect(overlay.value).toBe('palette');
-    expect(mode.value).toBe('command');
+    togglePalette(); // toggles closed again
+    expect(overlay.value).toBeNull();
+  });
+});
+
+describe('projects, nav and names', () => {
+  const summary = (id: number, title: string) => ({ id, title, aliases: [], status: 'active' as const, openActions: 0, updatedAt: '' });
+
+  it('projects and nav are cleared when the session ends (401), not only on logout', () => {
+    projects.value = [summary(1, 'Apollo')];
+    nav.value = { pinned: [{ kind: 'project', id: 1, title: 'Apollo', archived: false }], recents: [] };
+    people.value = [{ id: 1, name: 'Anna', aliases: [], notesMd: '', createdAt: '', updatedAt: '', archivedAt: null }];
+    shellActive.value = true;
+    session.value = null; // a 401: the shell stays active
+    expect(shellActive.value).toBe(true);
+    expect(projects.value).toEqual([]);
+    expect(nav.value).toEqual({ pinned: [], recents: [] });
+    expect(people.value).toEqual([]);
+  });
+
+  it('a project list that arrives after the session ended is dropped', async () => {
+    let release!: (r: Response) => void;
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((res) => { release = res; })));
+    const pending = refreshProjects();
+    session.value = null;
+    release(json({ projects: [summary(1, 'Apollo')] }));
+    await pending;
+    expect(projects.value).toEqual([]);
+  });
+
+  it('personName and projectTitle look up the loaded lists and return null for unknown ids', () => {
+    people.value = [{ id: 1, name: 'Anna', aliases: [], notesMd: '', createdAt: '', updatedAt: '', archivedAt: null }];
+    projects.value = [summary(7, 'Åre-resa')];
+    expect(personName(1)).toBe('Anna');
+    expect(personName(2)).toBeNull();
+    expect(personName(null)).toBeNull();
+    expect(projectTitle(7)).toBe('Åre-resa');
+    expect(projectTitle(8)).toBeNull();
+    expect(projectTitle(null)).toBeNull();
+    people.value = [];
+    projects.value = [];
   });
 });
 

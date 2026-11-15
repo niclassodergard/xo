@@ -30,7 +30,10 @@ describe('parseVoiceCommand', () => {
 
   it.each([
     ['go to actions', 'actions'],
-    ['Go to chat.', 'chat'],
+    ['Go to chat.', 'home'],
+    ['open the chat view', 'home'],
+    ['show projects', 'projects'],
+    ['Go to projects.', 'projects'],
     ['open notes', 'notes'],
     ['show people', 'people'],
     ['go to the notes page', 'notes'],
@@ -73,5 +76,33 @@ describe('parseVoiceCommand', () => {
     expect(parseVoiceCommand('start with Anna', people)).toBeNull();
     expect(parseVoiceCommand('', people)).toBeNull();
     expect(parseVoiceCommand('  ...  ', people)).toBeNull();
+  });
+
+  describe('projects', () => {
+    const projects = [
+      { id: 10, title: 'Board deck', aliases: ['deck'] },
+      { id: 11, title: 'Hiring', aliases: [] },
+      { id: 12, title: 'Anna', aliases: [] }, // same name as a person
+      { id: 13, title: 'Roadmap Q1', aliases: [] },
+      { id: 14, title: 'Roadmap Q2', aliases: [] },
+    ];
+    it.each([
+      ['open Board deck', 10], ['Show the hiring project.', null], ['show Hiring', 11], ['open deck', 10], ['please open board deck', 10],
+    ])('open_project: %s', (t, id) => {
+      expect(parseVoiceCommand(t, people, projects)).toEqual(id === null ? null : { type: 'open_project', projectId: id });
+    });
+    it('a person wins a tie with a project', () => {
+      expect(parseVoiceCommand('open Anna', people, projects)).toEqual({ type: 'open_person', personId: 1 });
+    });
+    it('ambiguous people or projects, unknown names and no projects are not commands', () => {
+      expect(parseVoiceCommand('open Roadmap', people, projects)).toBeNull(); // two projects
+      expect(parseVoiceCommand('open Erik', people, projects)).toBeNull(); // two people
+      expect(parseVoiceCommand('open Zelda', people, projects)).toBeNull();
+      expect(parseVoiceCommand('open Hiring', people)).toBeNull();
+      expect(parseVoiceCommand('open Hiring', people, [])).toBeNull();
+    });
+    it('a long phrase is never matched', () => {
+      expect(parseVoiceCommand(`open ${'Board deck '.repeat(20)}`, people, projects)).toBeNull();
+    });
   });
 });

@@ -1,6 +1,6 @@
 # XO
 
-A single-user "run my life" web app, meant to be reachable only over your Tailscale tailnet, that looks like a terminal UI. Type or dictate into a chat; the text is filed as a note, an action, or a 1-1 agenda item (linked to a person). Run 1-1 meetings from the accumulated agenda. One Node process, one SQLite file, keyboard and voice first.
+A single-user "run my life" web app, meant to be reachable only over your Tailscale tailnet. A calm, Claude-desktop-style UI: a sidebar, one ongoing conversation and the opened document beside it, light or dark following your system. Type or dictate into the conversation; the text is filed as a note, an action, or a 1-1 agenda item, and can be linked to a person and to a project. Run 1-1 meetings from the accumulated agenda. One Node process, one SQLite file, keyboard and voice first.
 
 Needs Node 26 and pnpm. The server runs TypeScript directly (no server build step).
 
@@ -56,6 +56,7 @@ All settings are environment variables (a `.env` file is loaded by `pnpm start`/
 | `OPENROUTER_KEY_FILE` (`./.openrouter-key`) | One-line key file |
 | `XO_OPENROUTER_ZDR` (`false`) | Zero Data Retention, see below |
 | `XO_LLM_MODEL` (`anthropic/claude-haiku-4.5`) | Classifier model |
+| `XO_QA_MODEL` (`anthropic/claude-sonnet-5.5`) | Model that answers questions about your data, see [Asking questions](#asking-questions) |
 | `XO_STT_MODEL` (`openai/whisper-1`) | Transcription model |
 | `XO_CLASSIFY_THRESHOLD` (`0.8`) | Below this confidence XO asks you instead of filing |
 | `XO_LLM` (`openrouter`) | `fake` for offline dev and tests |
@@ -71,7 +72,7 @@ Without a key, classification and voice are off: every unprefixed capture asks y
 
 ### Data retention at OpenRouter: `XO_OPENROUTER_ZDR`
 
-Default **`false`**. With `false`, XO sends no `zdr` field, so OpenRouter may route a request to any provider endpoint, and that provider may retain or train on what it receives: capture text, the names and aliases of your people (sent for classification), and recorded audio for voice. Treat everything you type or dictate as potentially retained upstream.
+Default **`false`**. With `false`, XO sends no `zdr` field, so OpenRouter may route a request to any provider endpoint, and that provider may retain or train on what it receives: capture text, the names and aliases of your people and the titles and aliases of your active projects (sent for classification; done and deleted projects are not sent), and recorded audio for voice. Treat everything you type or dictate as potentially retained upstream.
 
 With `true`, every request (chat and transcription) carries a forced `provider: { zdr: true }` and is never retried without it. If no Zero Data Retention endpoint is available for the model, the request fails: classification falls back to asking you, and transcription reports an error. Whether OpenRouter enforces ZDR for audio transcription is not confirmed; check with OpenRouter before relying on it for sensitive dictation.
 
@@ -145,7 +146,7 @@ pnpm xo export                 # ./xo-export-YYYYMMDD-HHmmss
 pnpm xo export --out ~/xo-md   # must be new or empty
 ```
 
-It writes `people/<slug>.md` (notes, open agenda and actions, agenda items resolved outside meetings, each meeting with notes, resolved items and follow-ups), `notes/<date>-<slug>-<id>.md` and `actions.md`. All times are UTC (also in file names and the default directory name). User Markdown (note and meeting bodies) is embedded as blockquotes so its headings cannot change the outline of the exported file. Soft-deleted items are not exported, and **captures still pending classification are not exported** (only what they filed). Everything is read in one consistent snapshot and written to a temporary sibling directory, then moved into place, so a failure leaves no partial plaintext behind. The target must be new, or an empty directory owned by you and not group/other-writable (otherwise it refuses); the parent directory must exist; directories are 0700 and files 0600; symlinks are never followed. The export is plaintext: keep it private (`xo-export-*` is git-ignored and docker-ignored). The export preserves links and HTML from your own Markdown as written, so do not treat a rendered export of untrusted content as safe.
+It writes `projects/<slug>.md` (status, aliases, description, linked people, open and done actions, note titles), `people/<slug>.md` (notes, open agenda and actions, agenda items resolved outside meetings, each meeting with notes, resolved items and follow-ups), `notes/<date>-<slug>-<id>.md` (with a "Project:" line) and `actions.md` (action lines name their project). All times are UTC (also in file names and the default directory name). User Markdown (note and meeting bodies) is embedded as blockquotes so its headings cannot change the outline of the exported file. Soft-deleted items are not exported, and **captures still pending classification are not exported** (only what they filed). Everything is read in one consistent snapshot and written to a temporary sibling directory, then moved into place, so a failure leaves no partial plaintext behind. The target must be new, or an empty directory owned by you and not group/other-writable (otherwise it refuses); the parent directory must exist; directories are 0700 and files 0600; symlinks are never followed. The export is plaintext: keep it private (`xo-export-*` is git-ignored and docker-ignored). The export preserves links and HTML from your own Markdown as written, so do not treat a rendered export of untrusted content as safe.
 
 In Docker, export inside the container, copy it out and delete it. Do not write into `/data`, which would leave plaintext in the volume:
 
@@ -157,69 +158,69 @@ docker exec xo rm -rf /tmp/xo-export
 
 ### Deletion and retention
 
-- Deleting a note, action or agenda item is a soft delete; after 30 days a daily job (also run at startup) hard-deletes it and every copy of its content (including chat history). SQLite `secure_delete` is on and ids are never reused.
+- Deleting a note, action, agenda item or project is a soft delete; after 30 days a daily job (also run at startup) hard-deletes it and every copy of its content (including chat history). SQLite `secure_delete` is on and ids are never reused.
+- **Deleting a project** hides it everywhere at once. Its actions and notes are kept, without a project; its people links, pins and recents are removed; a pending question is rebuilt from the remaining candidates, and dropped only when none remain (the capture then files without a project). After 30 days the purge removes the project row (title, aliases, description) and any pin or recents row left over. Text you typed yourself (for example `#apollo` in a note or in the conversation history) is your content and lives as long as that note or capture.
 - **Backups and exports taken before a purge still contain the purged data.** Rotate and delete old backups accordingly.
 - Person notes and meeting notes have no delete path in v0.1 (people are archived, not deleted).
 - Migration 003 (ids never reused) **fails closed** if the database already has dangling foreign keys: the schema version stays unchanged and data is left intact. Fix or remove the dangling rows (take a backup first), then restart.
 
 ## Using XO
 
-Press `?` for the help overlay, which lists the bindings of the current view (it is generated from the registered bindings and is authoritative). Modes, shown at the left of the status line:
+**Layout.** On a wide window: the sidebar on the left (`+ New`, `Search`, `Actions`, `Notes`, `People`, `Projects`, then **Pinned** and **Recents**, `Shortcuts` and `Log out` at the bottom), the conversation in the middle (centred while nothing is open) and the opened document in a panel on the right. The panel has Back, Expand (the document takes the whole width and the conversation is hidden) and Close. On a phone or a narrow window (under 900 px) the sidebar is a slide-in drawer and only one thing is shown at a time: the conversation or the document, with a Back button on the document. Pinned (people and projects) and Recents (the last 15 opened people, projects, 1-1s and notes) are stored on the server, so every device shows the same lists. Opening a document by typing its address does not add it to Recents; opening it from a link, the sidebar or the palette does. The theme follows the system (light or dark) and switches live.
 
-- **NORMAL**: keys are commands.
-- **INSERT**: you are typing in an input; only `Esc`, `Ctrl-K` and `Alt+Space` act as commands. `Esc` returns to NORMAL. The one exception is the chat input's own keys (`Enter` sends, `↑` in an empty input leaves it, `Alt-↑` / `Alt-↓` recall), which are not in the `?` overlay's generated lists (the overlay shows them in a fixed "Chat input" section).
-- **COMMAND**: the palette or another overlay is open.
+There are no modes: typing always types, and there are no single-letter commands. A printable key pressed while nothing is focused goes to the composer. Everything is also reachable by mouse and touch: clicking a row runs its first action, and chips are real buttons.
 
-Everything is reachable by keyboard; the same actions also work by mouse or touch (list rows and buttons).
+### Keyboard
 
-### Global key bindings (NORMAL mode unless noted)
+The list below matches `src/client/lib/keymap.ts` (the `Shortcuts` item and the Help overlay show that list).
 
 | Key | Action |
 |---|---|
-| `g c` / `g a` / `g n` / `g p` | Go to chat / actions / notes / people |
-| `←` / `→` | Previous / next view in the order Chat, Actions, Notes, People (wraps; a note counts as Notes, a person or 1-1 as People). Person and 1-1 use them for panes instead, and Chat uses them for answer options while a question is live (see below) |
-| `i` | Go to chat and focus the input |
-| `/` | Search |
-| `:` | Command palette |
-| `Ctrl-K` (any mode) | Command palette |
-| `?` | Help overlay |
-| `u` | Not global. Chat: undo the selected, filed capture. Person: undo the last done/drop shown by its undo offer. Elsewhere it does nothing. The palette command "Undo last capture" undoes the most recent filed capture from any view |
-| `j` / `k` or `↑` / `↓`, `g g`, `Shift+G`, `Enter` | In lists: move, top, bottom, open |
-| `Esc` | Close overlay, leave the input (to NORMAL), or go back |
-| hold `Space` | Push-to-talk (see Voice) |
-| `Alt+Space` (any mode) | Push-to-talk |
+| `Cmd-K` (`Ctrl-K`) | Search and commands (the palette) |
+| `Cmd-J` (`Ctrl-J`) | New capture: focus the composer (on a phone, goes to the conversation first) |
+| `Cmd-N` (`Ctrl-N`) | Same as `Cmd-J`, only where the browser delivers it. A normal Chrome or Safari tab keeps `Cmd-N` for a new window, so use `Cmd-J` |
+| `Cmd-B` (`Ctrl-B`) | Show or hide the sidebar (the drawer on a phone) |
+| `Esc` | Close the top dialog; else cancel a recording; else leave a text field (it saves); else close the document and focus the composer; else focus the composer |
+| `Tab` / `Shift-Tab` | Move between lists, fields and buttons |
+| any letter | Typing outside a field goes to the composer |
+| `↑` / `↓` | Pick a row in a list or the conversation (not while a text field has focus) |
+| `←` / `→` | Pick one of the highlighted row's action chips (for example Open, Undo, Reclassify) |
+| `Enter` | Run the highlighted chip; with none highlighted, the row's first action. A destructive action always asks first. A question in the conversation has no default: highlight an answer first |
+| Composer: `Enter` / `Shift-Enter` | Send / new line |
+| Composer: `↑` in an empty composer | Move into the conversation at the newest item (`↓` past the newest returns) |
+| Composer: `Option-↑` / `Option-↓` | Recall earlier or later texts; what you had typed is kept and comes back |
+| `Option-Space` (hold) | Push-to-talk anywhere (see Voice) |
+| `Space` (hold) | Push-to-talk when focus is not in a text field or on a button |
 
-The palette (`:`) also has: go to each view, "Start 1-1 with…" (person picker), "New person", "Undo last capture", "Dictate (start/stop microphone)", "Help" and "Log out". Type to filter, `Enter` runs, `Esc` closes.
+macOS and the browsers claim some keys, so XO uses none of `Cmd-T/W/Q/H/M/L/R`, `Cmd-digits`, `Cmd-arrows`, `Ctrl-arrows` (Mission Control), `Ctrl-Space` or `Ctrl-Tab`, and no `Option-letter`. Launcher apps (Raycast, ChatGPT, ...) can claim `Option-Space` system-wide; then use the mic button.
 
-### Chat
+**Search and commands (`Cmd-K`).** One input. Type to filter the commands (go to each list, "New person", "New project", "Start 1-1 with…", "Toggle sidebar", "Expand or collapse the document", "Close the document", "Dictate (start/stop microphone)", "Pin current" / "Unpin current" while a person or project is open, "Shortcuts", "Log out"), to find people and projects by name, and (from two characters, after a short pause) to search all your notes, actions, agenda items, people, projects and meeting notes on the server. `↑`/`↓` move across the groups, `Enter` opens or runs, `Esc` closes. The search text is sent in a POST body and never appears in the address bar or the server log.
 
-Chat is the home view and always opens with the input focused (INSERT). `Enter` sends, `Alt-↑` / `Alt-↓` (Option on macOS; Ctrl-↑/↓ is taken by Mission Control) recall earlier texts (empty or not). Text you had typed is kept aside and comes back when you step down past the newest, after you send a recalled line, or after leaving and re-entering Chat (clearing the input does not drop it). Edits you make to a *recalled* line are not protected: it is a copy of an earlier text, and the next recall may replace it. `Esc` leaves the input. Plain `↑` in an **empty** input also leaves it and selects the newest capture (NORMAL mode); in a non-empty input `↑`/`↓` move the caret as usual.
+There is no global "undo": Undo and Reclassify are chips on a filed capture in the conversation, so a destructive key only ever acts on what you can see highlighted.
 
-**Focus rule for questions.** When XO asks a question (what kind is this, unknown person, which person, which person for an agenda item), the input keeps focus so typing is never swallowed. To answer, press `Esc` first (NORMAL mode), then the option key shown on the question (`n` note, `t` action, `a` agenda, `d` discard, `c` create person, `p` pick a person, `s` skip, `1`..`9` for candidates). After an answer, focus returns to the input, unless the same capture asks a follow-up question. Pressing option keys while still in the input just types them.
+### Install as an app (optional)
 
-| Key | Action |
-|---|---|
-| `j` / `k` (or `↓` / `↑`), `g g`, `Shift+G` | Select a capture / first / newest. `↓` on the newest capture returns to the input |
-| `←` / `→` | While the selected capture has a live question: highlight (`>` marker; the status line reads it out) the previous / next answer option (candidates first, then options); `Enter` answers. Otherwise they switch view |
-| `Enter` | Answer with the highlighted option, or else open the filed item (note, person, or the actions list) |
-| `u` / `r` | Undo / reclassify the selected, filed capture |
-| `o` | Load older captures (when offered) |
+XO ships a web app manifest, so the browser can open it as its own window: Chrome's "Install" (the install icon in the address bar, or the menu), or Safari "File", "Add to Dock" (on iPhone: Share, "Add to Home Screen"). Nothing is cached offline; it is still the same site and the same login. Whether an installed window delivers `Cmd-N` is not verified. `Cmd-J` is the documented shortcut either way.
 
-### Other views
+### The conversation
 
-| View | Keys |
-|---|---|
-| Actions (mine / waiting for) | `x` done, `e` edit, `d d` delete, `a` add (mine), `Shift+A` add (waiting for), `t` show or hide done, `Enter` open the person, `o` load more |
-| Notes | `Enter` open, `a` new note, `d d` delete, `o` load more |
-| Note | `e` edit body, `t` edit title, `Esc` save and leave the field, `Ctrl-Enter` save, `p` open the person, `d d` delete, `q` back |
-| People | `Enter` open, `a` add person, `s` start 1-1 |
-| Search | The input is focused on entry; type at least 2 characters, `Enter` searches and moves to the results, then `j`/`k` and `Enter` open a hit; `Esc` leaves the input |
-| Person | `Tab` / `Shift+Tab` or `←` / `→` panes, `a` add agenda item, `x` done / `Shift+X` drop an agenda item (undo with `u`), `x` complete an action (in the actions pane), `s` start or resume a 1-1, `e` edit name and aliases, `n` edit person notes, `m` load older notes or meetings, `d d` delete an agenda item, `Enter` open a note or past meeting |
-| 1-1 meeting | `j` / `k` move, `x` check or uncheck an agenda item or follow-up, `a` add agenda item, `t` follow-up for me, `Shift+T` follow-up for them, `n` edit the meeting notes (autosaved every few seconds, and on `Esc` or blur), `Tab` / `Shift+Tab` or `←` / `→` panes, `d d` delete, `Shift+E` end the meeting (confirm with `y`, cancel with `n` or `Esc`), `Esc` back to the person. An ended meeting is read-only. |
+Every capture shows your text and XO's reply, with names as links that open the document in the panel. A filed capture offers **Open · Undo · Reclassify**. Use `↑` in an empty composer to enter the conversation, `↑`/`↓` to pick a capture, `←`/`→` to pick a chip and `Enter` to run it. After you act on an item, focus returns to the composer.
 
-Unchecked agenda items stay open and appear in the next 1-1 together with the previous meeting's notes, resolved items and follow-ups.
+**Questions.** XO never guesses. When it is unsure of the kind, or a person or project is unknown or ambiguous, the capture waits and shows its question as chips (for example: Note, Action, Waiting for, Agenda item, Discard; "Create person" / "Pick existing person" / "Skip" for an unknown `@name`; "Create project" / "Pick existing project" / "Skip (no project)" for an unknown `#name`; the candidates for an ambiguous one). The composer keeps focus while a question is open, so typing more text never answers it: move into the conversation, highlight a chip and press `Enter`. "Pick existing…" opens a picker. If every project a question offered was deleted meanwhile, the capture shows "Ready to file" with File and Discard.
 
-### Prefix commands (chat)
+### Asking questions
+
+Ask XO about your own data in the conversation: `/ask what did I promise Anna?` (or `/q …`). A message without a prefix that the classifier recognises as a question with confidence at or above `XO_CLASSIFY_THRESHOLD` is **answered automatically**, which sends excerpts of your data to the model (see below). To avoid that, start the message with a prefix such as `/note` or `/todo`, which skips the classifier. When the classifier is unsure, nothing is sent: the kind question gains an **Answer it** chip next to Note, Action and Agenda item.
+
+- XO shows "Looking through your data…", then the answer as plain text (never formatted or executed) and, under **Sources**, one chip per document it used. `←`/`→` pick a chip, `Enter` opens the document in the panel; `Enter` on an answer with no chip picked opens its first source. Actions open the Actions list, and agenda items open the People list.
+- **Nothing matches:** when nothing in your data fits the question, XO says "Nothing in your data matches that." and sends nothing to the model.
+- **If the answer fails** (the model is unavailable or too slow, you asked too many questions in a minute, or answering is not configured) the question stays in the conversation with a plain message and the chips **Retry**, **File instead** (it becomes a normal capture and asks for the kind) and **Discard**. A question is only sent after you send it or press Answer / Retry: reloading the page never asks anything by itself.
+- **Delete answer** removes an answer. An answer is a copy of what it used: if any note, action, agenda item or project it used is deleted, the answer is blanked on the next read ("This answer was removed because something it used has been deleted"), and the 30-day purge erases it. Answers are not part of the Markdown export.
+- Answering needs an OpenRouter key (without one XO says answering is not set up); `XO_QA_MODEL` picks the model. At most 20 questions a minute.
+
+**What leaves the machine.** To answer, the server first searches your data locally (no model involved) and picks the most relevant excerpts: up to 24 items, each cut to about 600 characters and 12 000 characters in all, from your notes, actions, agenda items, people, projects and meeting notes (deleted items are never included). Your question and those excerpts, with the item titles, are sent to OpenRouter and the model you set in `XO_QA_MODEL`. Nothing else is sent, and nothing is sent when no excerpt matches. The answer model always uses low-effort reasoning, `max_tokens` 3000 and a 45 second deadline. With `XO_OPENROUTER_ZDR=false` (the default) the provider may retain what it receives, see [Data retention at OpenRouter](#data-retention-at-openrouter-xo_openrouter_zdr); with `true` the request goes only to Zero Data Retention endpoints and fails otherwise. The question, the excerpts and the answer are never written to the server log. The answer text and its sources are stored in the database next to the capture.
+
+### Prefix commands (composer)
 
 | Prefix | Result |
 |---|---|
@@ -227,23 +228,41 @@ Unchecked agenda items stay open and appear in the next 1-1 together with the pr
 | `/todo` (`/t`, `/action`) | Action owned by me |
 | `/wait` (`/w`) | Action owned by them |
 | `/agenda` (`/a`) | 1-1 agenda item (needs a person) |
+| `/ask` (`/q`) | A question about your own data: XO answers it in the conversation (see [Asking questions](#asking-questions)); the classifier is not called |
 | `@name` or `@"Full Name"` | Link a person (the first mention is used; the `@` is dropped from the text). Unknown names ask before creating a person |
+| `#name` or `#"Full title"` | Link a project (the first mention is used; the `#` is dropped from the text). Not after a letter or digit, and the first character must be a letter, so `#42`, `issue #42` and `# heading` are plain text. Unknown names ask before creating a project. A hyphen or space is the same: `#board-deck` matches "Board deck". Agenda items carry no project |
 
-A prefix skips the classifier. Without one, the classifier decides; when it is unsure, fails or no key is set, XO asks you with a keyboard-selectable question and files nothing until you answer. Known names and aliases in the text link automatically (in free text a name must start with an uppercase letter). `u` undoes, `r` reclassifies.
+A prefix skips the classifier for the kind. Without one, the classifier decides; when it is unsure, fails or no key is set, XO asks and files nothing until you answer. Known names and aliases in the text link a person automatically (in free text a name must start with an uppercase letter). A project named in free text is linked silently only when its multi-word title or alias matches exactly; a single-word match, or a project the classifier suggests, is only offered as a question. Done projects are never matched.
+
+### Documents
+
+Lists and the rows inside documents all work the same way: `↑`/`↓` pick a row, `←`/`→` pick a chip, `Enter` runs it, and `↓` past the last row goes to the add field (`↑` in an empty add field returns to the list).
+
+| Document | What it does |
+|---|---|
+| Actions | Open actions grouped by project (active projects by title, then on hold, then "No project"); inside a group, mine first, then waiting-for. Filter by person ("Person: any"), "Show done". Row chips: Done / Reopen, Edit, Project…, Person…, Mark waiting / Mark mine, Delete. An add field per group creates an action in that project |
+| Notes | Newest first with previews and person and project labels; add a note; Open, Delete |
+| Note | Title and body (autosaved), person and project pickers, Delete |
+| People | Add a person; Open or Start 1-1 |
+| Person | Name and aliases, Pin, Start or Resume 1-1, archive; sections for the agenda (add field; Done, Drop, Delete), open actions (mine and theirs, with their project), notes, past meetings and the person's own notes |
+| 1-1 meeting | Agenda with check-off; follow-ups for me or for them (owner toggle on the add field); meeting notes (autosaved, and saved on `Esc`); the person's other open actions across projects, grouped by project; the previous 1-1's notes, resolved items and follow-ups; End meeting (asks first). An ended meeting is read-only. Unchecked agenda items stay open and appear in the next 1-1 |
+| Projects | Grouped Active, On hold, Done with open-action counts; add a project |
+| Project | Rename, status (active / on hold / done), aliases, description (autosaved), Pin, linked people (add, remove), actions (with an add field), done actions (collapsed), notes (with add), Delete project (its actions and notes are kept, without a project) |
 
 ### Voice
 
 Push-to-talk needs a microphone and, in a browser, a secure origin (`https://` or localhost). **Dictated audio leaves your machine**: it is uploaded to the server and sent to OpenRouter for transcription. Whether the provider may retain it depends on `XO_OPENROUTER_ZDR`, see [Data retention at OpenRouter](#data-retention-at-openrouter-xo_openrouter_zdr).
 
-- **Hold `Space`** (NORMAL mode) or **`Alt+Space`** (any mode) to record; release to transcribe. A held-key recording is sent automatically at 120 seconds.
-- The **mic button** in the status line and the palette command "Dictate" toggle recording instead (the way to talk on a phone). Such a recording that reaches the 2-minute limit is **not** sent automatically: the status line asks **Send (Enter) / Discard (Esc)**, and discards the audio after 60 seconds without a choice, or when the tab is hidden or loses focus.
-- `Esc` while recording or transcribing cancels. Recordings shorter than about 300 ms are ignored.
-- A transcript that matches a command runs it. Anything else is appended to the chat input; check it and press `Enter` to file it (such captures are stored with source `voice`).
+- **Hold `Option-Space`** (anywhere) or **`Space`** (when focus is not in a text field or on a button) to record; release to transcribe. A held-key recording is sent automatically at 120 seconds, and only while the key is demonstrably still held.
+- The **mic button** in the composer (large on a phone) and the palette command "Dictate" toggle recording instead (the way to talk on a phone). Such a recording that reaches the 2-minute limit is **not** sent automatically: a **status bar at the top of the screen** (shown in every layout, also with an expanded document or on a phone) asks **Send / Discard (Esc)**. `Enter` sends the recording only while that bar is on screen and you have not typed for 1.5 seconds, so a draft you are writing is never sent by mistake; until then use the Send button. The audio is discarded after 60 seconds without a choice, when the tab is hidden or loses focus, and when the session ends.
+- `Esc` while recording or transcribing cancels, and does not also close the open document. Recordings shorter than about 300 ms are ignored.
+- A transcript that matches a command runs it. Anything else is appended to the composer text; check it and press `Enter` to file it (such captures are stored with source `voice`).
 
-Commands (case-insensitive, trailing punctuation and "please" ignored; the person must match exactly one known person, otherwise the text is dictation):
+Commands (case-insensitive, trailing punctuation and "please" ignored; a person or project must match exactly one known name, otherwise the text is dictation):
 
 | Say | Does |
 |---|---|
 | "open Anna", "show Anna" | Open the person |
+| "open Apollo", "show Apollo" | Open the project (a person with the same name wins; several matches mean dictation) |
 | "start 1-1 with Anna" (also "one on one", "1:1", "meeting") | Start (or resume) a 1-1 |
-| "go to chat / actions / notes / people" (also "open ...") | Switch view |
+| "go to chat / actions / notes / people / projects" (also "open ...") | Open that list ("chat" returns to the conversation) |

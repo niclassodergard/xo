@@ -1,23 +1,23 @@
 import { signal } from '@preact/signals';
 import type { Signal } from '@preact/signals';
 import { useLayoutEffect, useRef } from 'preact/hooks';
+import { focusTarget } from './focus.ts';
 
-// Keyboard engine. The matching logic (tokens, sequences, layers, precedence) is DOM-free so it
-// can be unit-tested in node; only installKeyListeners() and useKeys() touch the browser/Preact.
-
-export type Mode = 'normal' | 'insert' | 'command';
-export const mode: Signal<Mode> = signal<Mode>('normal');
-
-/** The only keys that still work while typing (INSERT) or in the palette (COMMAND). */
-export const TYPING_ALLOWED: ReadonlySet<string> = new Set(['esc', 'ctrl+k', 'alt+space']);
-export const SEQUENCE_TIMEOUT_MS = 1000;
+// Keyboard engine (v0.2): no modes, no key sequences. Matching is DOM-free (the caller passes a
+// FocusContext) so it can be unit-tested in node; only installKeyListeners() and useKeys() touch the
+// browser and Preact. Rules (plan 4.8):
+//  1. While a `modal` layer exists, only modal bindings match, except `esc` and `mod+k` in the global layer.
+//  2. While focus is in a text entry, only bindings with mod or alt, and `esc`, fire.
+//  3. `panel` / `stream` bindings fire only while focus is inside [data-region="panel" | "stream"].
+//  4. A focused button, link or checkbox keeps native Enter and Space.
+//  5. Type-to-composer: a printable key with no text entry focused and no modal open focuses the composer.
 
 // ---- tokens -------------------------------------------------------------------------------
 
 export interface KeyLike {
   key: string; code?: string;
   ctrlKey?: boolean; altKey?: boolean; shiftKey?: boolean; metaKey?: boolean;
-  isComposing?: boolean; keyCode?: number;
+  isComposing?: boolean; keyCode?: number; repeat?: boolean;
 }
 
 /** IME composition (Safari reports keyCode 229 with isComposing already false on the final key). */
@@ -26,18 +26,18 @@ export function composing(e: { isComposing?: boolean; keyCode?: number }): boole
 }
 
 const NAMED: Record<string, string> = {
-  Escape: 'esc', Enter: 'enter', Tab: 'tab', ' ': 'space', ' ': 'space',
+  Escape: 'esc', Enter: 'enter', Tab: 'tab', ' ': 'space',
   ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right',
   Backspace: 'backspace', Delete: 'delete', Home: 'home', End: 'end', PageUp: 'pageup', PageDown: 'pagedown',
 };
 const MODIFIER_ONLY = new Set(['Shift', 'Control', 'Alt', 'Meta', 'AltGraph', 'CapsLock', 'OS', 'Dead', 'Unidentified', 'Process']);
 const LETTER = /^\p{L}$/u;
 
-function build(ctrl: boolean, alt: boolean, shift: boolean, key: string): string {
-  return [ctrl ? 'ctrl' : '', alt ? 'alt' : '', shift ? 'shift' : '', key].filter(Boolean).join('+');
+function build(mod: boolean, alt: boolean, shift: boolean, key: string): string {
+  return [mod ? 'mod' : '', alt ? 'alt' : '', shift ? 'shift' : '', key].filter(Boolean).join('+');
 }
 
-/** Canonical token for a key event, or null for modifier-only presses. Ctrl and Cmd are the same. */
+/** Canonical token for a key event, or null for modifier-only presses. Ctrl and Cmd are the same (`mod`). */
 export function eventToken(ev: KeyLike): string | null {
   if (MODIFIER_ONLY.has(ev.key)) return null;
   const key = ev.code === 'Space' ? 'space' : (NAMED[ev.key] ?? ev.key.toLowerCase());
@@ -49,162 +49,134 @@ export function eventToken(ev: KeyLike): string | null {
 const KEY_ALIASES: Record<string, string> = {
   escape: 'esc', return: 'enter', ' ': 'space', arrowup: 'up', arrowdown: 'down', arrowleft: 'left', arrowright: 'right',
 };
-const MODIFIER_ALIASES: Record<string, 'ctrl' | 'alt' | 'shift'> = {
-  ctrl: 'ctrl', control: 'ctrl', cmd: 'ctrl', meta: 'ctrl', alt: 'alt', option: 'alt', shift: 'shift',
+const MODIFIER_ALIASES: Record<string, 'mod' | 'alt' | 'shift'> = {
+  mod: 'mod', ctrl: 'mod', control: 'mod', cmd: 'mod', meta: 'mod', alt: 'alt', option: 'alt', shift: 'shift',
 };
 
-function normalizeStep(step: string): string {
+/** 'mod+k' -> 'mod+k'; 'ctrl+K' -> 'mod+k'; 'Escape' -> 'esc'; 'G' -> 'shift+g'. One key, no sequences. */
+export function parseSpec(spec: string): string {
+  const step = spec.trim();
+  if (step === '') throw new Error('Empty key binding');
+  if (/\s/.test(step)) throw new Error(`Key sequences are not supported: "${spec}"`);
   if (step === '+') return '+';
-  // A literal uppercase letter means shift+letter ('G').
   if (step.length === 1 && LETTER.test(step) && step !== step.toLowerCase()) return `shift+${step.toLowerCase()}`;
   const parts = step.split('+');
   const rawKey = parts.pop() ?? '';
-  let ctrl = false, alt = false, shift = false;
+  let mod = false, alt = false, shift = false;
   for (const p of parts) {
     const m = MODIFIER_ALIASES[p.toLowerCase()];
-    if (!m) throw new Error(`Unknown modifier "${p}" in key binding "${step}"`);
-    if (m === 'ctrl') ctrl = true; else if (m === 'alt') alt = true; else shift = true;
+    if (!m) throw new Error(`Unknown modifier "${p}" in key binding "${spec}"`);
+    if (m === 'mod') mod = true; else if (m === 'alt') alt = true; else shift = true;
   }
   const lower = rawKey.toLowerCase();
   const key = KEY_ALIASES[lower] ?? lower;
-  if (!key) throw new Error(`Empty key in binding "${step}"`);
-  return build(ctrl, alt, shift, key);
+  if (!key) throw new Error(`Empty key in binding "${spec}"`);
+  return build(mod, alt, shift, key);
 }
 
-/** 'g c' -> ['g','c']; 'shift+g' / 'G' -> ['shift+g']; 'ctrl+k' -> ['ctrl+k']. */
-export function parseSpec(spec: string): string[] {
-  const steps = spec.trim().split(/\s+/).filter(Boolean);
-  if (steps.length === 0) throw new Error('Empty key binding');
-  return steps.map(normalizeStep);
+function hasModOrAlt(token: string): boolean {
+  const parts = token.split('+');
+  parts.pop();
+  return parts.includes('mod') || parts.includes('alt');
 }
 
 // ---- engine -------------------------------------------------------------------------------
 
 export type KeyHandler = (e: KeyboardEvent) => void;
-/**
- * Precedence: modal > view > list > global. While any modal layer exists, lower layers do not
- * match at all, except the always-on keys below (only when bound in the global layer).
- */
-export type Scope = 'modal' | 'view' | 'list' | 'global';
-const PRIORITY: Record<Scope, number> = { modal: 3, view: 2, list: 1, global: 0 };
-export const ALWAYS_ON: ReadonlySet<string> = new Set(['esc', 'ctrl+k']);
+/** Precedence: modal > panel / stream (disjoint regions) > global. */
+export type Scope = 'modal' | 'panel' | 'stream' | 'global';
+const PRIORITY: Record<Scope, number> = { modal: 3, panel: 2, stream: 2, global: 0 };
+/** The only keys that pass a modal layer, and only when bound in the global layer. */
+export const ALWAYS_ON: ReadonlySet<string> = new Set(['esc', 'mod+k']);
 
-export interface LayerBinding { spec: string; steps: string[]; run: KeyHandler; description?: string }
-export interface LayerInput {
-  scope: Scope; modes: Mode[];
-  bindings: { spec: string; run: KeyHandler; description?: string }[];
+/** What the engine needs to know about focus; computed from the DOM by installKeyListeners. */
+export interface FocusContext {
+  /** A text field, textarea, select or contenteditable has focus. */
+  textEntry: boolean;
+  /** `data-region` of the closest ancestor of the focused element (e.g. 'panel', 'stream'), or null. */
+  region: string | null;
+  /** The key's target is a button, link, summary or checkbox: it keeps native Enter and Space. */
+  nativeActivation: boolean;
 }
-export interface BindingInfo { spec: string; description: string; scope: Scope }
+export const NO_FOCUS: FocusContext = { textEntry: false, region: null, nativeActivation: false };
 
-interface Layer { scope: Scope; modes: Mode[]; bindings: LayerBinding[]; order: number }
+interface LayerBinding { spec: string; token: string; run: KeyHandler; description?: string }
+export interface LayerInput { scope: Scope; bindings: { spec: string; run: KeyHandler; description?: string }[] }
+interface Layer { scope: Scope; bindings: LayerBinding[]; order: number }
 
 export interface KeyEngine {
   addLayer(input: LayerInput): () => void;
-  /** Feed one key. Returns true if the key was consumed (caller should preventDefault). */
-  handle(ev: KeyLike, currentMode: Mode, domEvent?: KeyboardEvent): boolean;
-  reset(): void;
-  /** True while any modal layer (overlay, voice recording) exists, whatever the mode. */
+  /** Feed one key. Returns true if the key was consumed (the caller should preventDefault). */
+  handle(ev: KeyLike, ctx: FocusContext, domEvent?: KeyboardEvent): boolean;
+  /** True while any modal layer (overlay, drawer, voice recording) exists. */
   modalOpen(): boolean;
-  listBindings(): BindingInfo[];
 }
 
-export function createKeyEngine(
-  now: () => number = () => Date.now(),
-  onPending?: (seq: string[] | null) => void,
-): KeyEngine {
+export function createKeyEngine(): KeyEngine {
   const layers = new Set<Layer>();
   let counter = 0;
-  let pending: { seq: string[]; at: number } | null = null;
-  function setPending(p: { seq: string[]; at: number } | null) {
-    pending = p;
-    onPending?.(p ? p.seq : null);
-  }
-
-  function ordered(m: Mode): Layer[] {
-    return [...layers]
-      .filter((l) => l.modes.includes(m))
-      .sort((a, b) => PRIORITY[b.scope] - PRIORITY[a.scope] || b.order - a.order);
-  }
-
-  /** Highest-priority layer with an exact match wins; otherwise any prefix match means "wait". */
-  function match(seq: string[], m: Mode): { exact: LayerBinding | null; prefix: boolean } {
-    let prefix = false;
-    const modalOpen = [...layers].some((l) => l.scope === 'modal');
-    for (const layer of ordered(m)) {
-      let layerPrefix = false;
-      for (const b of layer.bindings) {
-        if (modalOpen && layer.scope !== 'modal') {
-          // Only the global layer's Esc / Ctrl-K pass a modal; a view's own Esc must not.
-          const alwaysOn = layer.scope === 'global' && b.steps.length === 1 && ALWAYS_ON.has(b.steps[0]!);
-          if (!alwaysOn) continue;
-        }
-        if (b.steps.length === seq.length && b.steps.every((s, i) => s === seq[i])) return { exact: b, prefix: false };
-        if (b.steps.length > seq.length && seq.every((s, i) => s === b.steps[i])) layerPrefix = true;
-      }
-      if (layerPrefix) { prefix = true; break; }
-    }
-    return { exact: null, prefix };
-  }
+  const isModalOpen = (): boolean => { for (const l of layers) if (l.scope === 'modal') return true; return false; };
 
   return {
     addLayer(input) {
       const layer: Layer = {
-        scope: input.scope, modes: input.modes, order: counter++,
-        bindings: input.bindings.map((b) => ({ ...b, steps: parseSpec(b.spec) })),
+        scope: input.scope, order: counter++,
+        bindings: input.bindings.map((b) => ({ ...b, token: parseSpec(b.spec) })),
       };
       layers.add(layer);
       return () => { layers.delete(layer); };
     },
-    handle(ev, currentMode, domEvent) {
+    handle(ev, ctx, domEvent) {
       if (composing(ev)) return false;
       const token = eventToken(ev);
       if (token === null) return false;
-      if (currentMode !== 'normal' && !TYPING_ALLOWED.has(token)) { setPending(null); return false; }
-      const t = now();
-      let seq = pending && t - pending.at <= SEQUENCE_TIMEOUT_MS ? [...pending.seq, token] : [token];
-      setPending(null);
-      let res = match(seq, currentMode);
-      if (!res.exact && !res.prefix && seq.length > 1) {
-        seq = [token];
-        res = match(seq, currentMode);
-      }
-      if (res.exact) {
-        if (domEvent) res.exact.run(domEvent);
-        else res.exact.run(undefined as unknown as KeyboardEvent);
-        return true;
-      }
-      if (res.prefix) { setPending({ seq, at: t }); return true; }
-      return false;
-    },
-    reset() { setPending(null); },
-    modalOpen() { return [...layers].some((l) => l.scope === 'modal'); },
-    listBindings() {
-      const out: BindingInfo[] = [];
-      const seen = new Set<string>();
-      for (const layer of [...layers].sort((a, b) => PRIORITY[b.scope] - PRIORITY[a.scope] || a.order - b.order)) {
-        for (const b of layer.bindings) {
-          const id = `${layer.scope}:${b.spec}`;
-          if (seen.has(id)) continue;
-          seen.add(id);
-          out.push({ spec: b.spec, description: b.description ?? '', scope: layer.scope });
+      // A held Enter (auto-repeat) never runs anything: one press, one action.
+      if (token === 'enter' && ev.repeat) return false;
+      // Rule 4: focused buttons/links/checkboxes keep native Enter and Space.
+      if (ctx.nativeActivation && (token === 'enter' || token === 'space')) return false;
+      // Rule 2: a text field owns plain keys; only mod/alt combinations and Esc reach bindings.
+      if (ctx.textEntry && token !== 'esc' && !hasModOrAlt(token)) return false;
+      const modal = isModalOpen();
+      const ordered = [...layers].sort((a, b) => PRIORITY[b.scope] - PRIORITY[a.scope] || b.order - a.order);
+      for (const layer of ordered) {
+        if (modal && layer.scope !== 'modal' && !(layer.scope === 'global' && ALWAYS_ON.has(token))) continue; // rule 1
+        if (layer.scope === 'panel' && ctx.region !== 'panel') continue; // rule 3
+        if (layer.scope === 'stream' && ctx.region !== 'stream') continue;
+        const b = layer.bindings.find((x) => x.token === token);
+        if (b) {
+          b.run(domEvent ?? (undefined as unknown as KeyboardEvent));
+          return true;
         }
       }
-      return out;
+      return false;
     },
+    modalOpen: isModalOpen,
   };
 }
 
-/** The prefix typed so far (e.g. 'g'), shown in the status line; cleared when the sequence times out. */
-export const pendingKeys: Signal<string> = signal('');
-let pendingTimer: ReturnType<typeof setTimeout> | undefined;
-export const engine: KeyEngine = createKeyEngine(undefined, (seq) => {
-  clearTimeout(pendingTimer);
-  pendingKeys.value = seq ? seq.join(' ') : '';
-  if (seq) pendingTimer = setTimeout(() => { pendingKeys.value = ''; }, SEQUENCE_TIMEOUT_MS);
-});
+export const engine: KeyEngine = createKeyEngine();
 
-/** True while a modal layer exists. Element-level key handlers (the chat input) use it to stand down behind overlays. */
+/** True while a modal layer exists. Element-level key handlers (composer, add fields) stand down behind overlays. */
 export function modalOpen(): boolean { return engine.modalOpen(); }
+
+/** Count of real key presses so far; see keystrokeMark(). */
+let keystrokes = 0;
+/**
+ * Take this before an await, and compare after it with `typedSince(mark)`: an async result must not move focus
+ * when the user typed meanwhile (their letters would land in the wrong place).
+ */
+export function keystrokeMark(): number { return keystrokes; }
+export function typedSince(mark: number): boolean { return keystrokes !== mark; }
+
+/**
+ * Rule 5. A printable key (no mod; Option alone counts, for `@` on a Swedish Mac; not Space or Enter) pressed with no text entry focused and no modal
+ * open belongs to the composer. Called only after no binding consumed the key.
+ */
+export function shouldTypeToComposer(ev: KeyLike, ctx: FocusContext, modalIsOpen: boolean): boolean {
+  if (modalIsOpen || ctx.textEntry || composing(ev)) return false;
+  if (ev.ctrlKey || ev.metaKey) return false;
+  return typeof ev.key === 'string' && [...ev.key].length === 1 && ev.key !== ' ';
+}
 
 // Key-up listeners (hold-to-talk). The engine only sees key-down: a binding runs on the first
 // down (check `e.repeat` to ignore auto-repeat) and the feature subscribes here for the release.
@@ -217,16 +189,18 @@ export function onKeyUp(fn: (e: KeyboardEvent) => void): () => void {
 // ---- Preact hook --------------------------------------------------------------------------
 
 export interface UseKeysOptions {
-  modes?: Mode[]; enabled?: boolean;
-  /** Help-overlay text per binding spec. */
+  enabled?: boolean;
+  /** Help text per binding spec (documentation; the Help overlay itself reads lib/keymap.ts). */
   descriptions?: Record<string, string>;
-  /** Precedence: view > list > global. Views use the default. */
+  /** Default 'global'. */
   scope?: Scope;
 }
 
 /**
- * Register key bindings while the component is mounted. Binding syntax: 'j', 'shift+g', 'g c'
- * (sequence, 1 s timeout), 'ctrl+k', 'enter', 'esc', 'space'. Handlers always see the latest render.
+ * Register key bindings while the component is mounted. Binding syntax: 'mod+k', 'alt+space', 'esc',
+ * 'enter', 'up', 'down', 'left', 'right', 'space', 'shift+…'. Handlers always see the latest render.
+ * Registered in a layout effect: a layer (especially a modal one) must exist before the next keystroke
+ * and be gone as soon as its component unmounts.
  */
 export function useKeys(bindings: Record<string, KeyHandler>, opts: UseKeysOptions = {}): void {
   const ref = useRef(bindings);
@@ -234,16 +208,13 @@ export function useKeys(bindings: Record<string, KeyHandler>, opts: UseKeysOptio
   const descRef = useRef(opts.descriptions);
   descRef.current = opts.descriptions;
   const enabled = opts.enabled ?? true;
-  const modes = opts.modes ?? ['normal'];
-  const scope = opts.scope ?? 'view';
+  const scope = opts.scope ?? 'global';
   const specs = Object.keys(bindings);
-  const signature = `${specs.join('|')}#${modes.join(',')}#${enabled}#${scope}`;
-  // Layout effect: a layer (especially a modal one) must exist before the next keystroke, and be gone as
-  // soon as its component unmounts; useEffect runs after paint and leaves a window with the wrong layers.
+  const signature = `${specs.join('|')}#${enabled}#${scope}`;
   useLayoutEffect(() => {
     if (!enabled) return undefined;
     return engine.addLayer({
-      scope, modes,
+      scope,
       bindings: specs.map((spec) => ({
         spec,
         run: (e) => ref.current[spec]?.(e),
@@ -299,7 +270,7 @@ export function filterCommands(query: string, cmds: Command[]): Command[] {
 // ---- DOM glue -----------------------------------------------------------------------------
 
 export function isTextEntry(el: Element | null): boolean {
-  if (!el) return false;
+  if (!el || typeof HTMLElement === 'undefined') return false;
   if (el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) return true;
   if (el instanceof HTMLInputElement) {
     return !['checkbox', 'radio', 'button', 'submit', 'reset', 'file', 'range', 'color', 'image'].includes(el.type);
@@ -307,43 +278,45 @@ export function isTextEntry(el: Element | null): boolean {
   return el instanceof HTMLElement && el.isContentEditable;
 }
 
-/** Install the window-level key and focus listeners once. Returns the uninstall function. */
+const NATIVE_TAGS = /^(BUTTON|A|SUMMARY)$/;
+
+/** Focus facts for one key event. Tolerates the fake DOM objects of unit tests. */
+export function focusContext(active: Element | null, target: EventTarget | null): FocusContext {
+  const closest = active && typeof (active as Element).closest === 'function'
+    ? (active as Element).closest('[data-region]') : null;
+  const t = target as (HTMLElement & { type?: string }) | null;
+  const tag = t && typeof t.tagName === 'string' ? t.tagName : '';
+  const nativeActivation = NATIVE_TAGS.test(tag) || (tag === 'INPUT' && (t?.type === 'checkbox' || t?.type === 'radio'));
+  return {
+    textEntry: isTextEntry(active),
+    region: closest ? closest.getAttribute('data-region') : null,
+    nativeActivation,
+  };
+}
+
+/** Install the window-level key listeners once. Returns the uninstall function. */
 export function installKeyListeners(win: Window = window): () => void {
   const doc = win.document;
-  const reconcile = () => {
-    if (mode.value === 'command') return;
-    const typing = isTextEntry(doc.activeElement);
-    if (typing && mode.value !== 'insert') mode.value = 'insert';
-    else if (!typing && mode.value === 'insert') mode.value = 'normal';
-  };
   const onKeyDown = (e: KeyboardEvent) => {
     if (composing(e)) return;
-    reconcile();
-    const token = eventToken(e);
-    const t = e.target;
-    // Let focused buttons/links keep Enter and Space (activation).
-    if ((token === 'enter' || token === 'space') && t instanceof HTMLElement && /^(BUTTON|A|SUMMARY)$/.test(t.tagName)) return;
-    if (engine.handle(e, mode.value, e)) e.preventDefault();
+    if (eventToken(e) !== null) keystrokes++;
+    const ctx = focusContext(doc.activeElement, e.target);
+    if (engine.handle(e, ctx, e)) { e.preventDefault(); return; }
+    // Rule 5: no binding took it. Not prevented, so the character lands in the composer.
+    if (shouldTypeToComposer(e, ctx, engine.modalOpen())) focusTarget('composer', { queue: false });
   };
-  const onFocus = () => reconcile();
   const onKeyUpEv = (e: KeyboardEvent) => { for (const fn of keyUpListeners) fn(e); };
-  // After a mouse click, drop focus from buttons/links so Space/Enter keep reaching the key engine.
+  // After a mouse click, drop focus from buttons/links so Space keeps reaching push-to-talk.
   const onClick = (e: MouseEvent) => {
     const t = e.target;
-    if (e.detail > 0 && t instanceof HTMLElement && /^(BUTTON|A)$/.test(t.tagName)) t.blur();
+    if (e.detail > 0 && t instanceof HTMLElement && /^(BUTTON|A)$/.test(t.tagName) && !t.closest('[role=dialog]')) t.blur();
   };
   win.addEventListener('keyup', onKeyUpEv, true);
   win.addEventListener('click', onClick);
   win.addEventListener('keydown', onKeyDown, true);
-  win.addEventListener('focusin', onFocus, true);
-  const onFocusOut = () => queueMicrotask(reconcile);
-  win.addEventListener('focusout', onFocusOut, true);
   return () => {
     win.removeEventListener('keydown', onKeyDown, true);
     win.removeEventListener('keyup', onKeyUpEv, true);
     win.removeEventListener('click', onClick);
-    win.removeEventListener('focusin', onFocus, true);
-    win.removeEventListener('focusout', onFocusOut, true);
-    engine.reset();
   };
 }

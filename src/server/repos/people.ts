@@ -100,7 +100,7 @@ export function updatePerson(
 interface MeetingRow { id: number; person_id: number; started_at: string; ended_at: string | null; notes_md: string }
 
 interface NoteSummaryRow {
-  id: number; title: string; preview: string; person_id: number | null; created_at: string; updated_at: string;
+  id: number; title: string; preview: string; person_id: number | null; project_id: number | null; created_at: string; updated_at: string;
 }
 
 function activeMeetingId(db: DatabaseSync, id: Id): Id | null {
@@ -164,12 +164,12 @@ export function getPersonDetailSummary(db: DatabaseSync, id: Id): PersonDetailRe
   const notes = (
     db
       .prepare(
-        `SELECT id, title, substr(body_md, 1, ?) AS preview, person_id, created_at, updated_at
+        `SELECT id, title, substr(body_md, 1, ?) AS preview, person_id, project_id, created_at, updated_at
          FROM notes WHERE person_id = ? AND deleted_at IS NULL ORDER BY id DESC LIMIT ?`,
       )
       .all(LIMITS.notePreview, id, LIMITS.personNotes) as unknown as NoteSummaryRow[]
   ).map((r) => ({
-    id: r.id, title: r.title, preview: r.preview, personId: r.person_id, createdAt: r.created_at, updatedAt: r.updated_at,
+    id: r.id, title: r.title, preview: r.preview, personId: r.person_id, projectId: r.project_id, createdAt: r.created_at, updatedAt: r.updated_at,
   }));
   return {
     person, ...openItems(db, id), notes,

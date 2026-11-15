@@ -11,11 +11,11 @@ let baseFocus: HTMLElement | null = null;
 export function Overlay(props: { label: string; wide?: boolean; onBackdrop?: () => void; children?: ComponentChildren }) {
   const box = useRef<HTMLDivElement>(null);
   // Read during the first render, before any child moves focus into the dialog.
-  const [returnTo] = useState<HTMLElement | null>(() => {
+  const [opener] = useState<HTMLElement | null>(() => {
     const a = typeof document !== 'undefined' ? document.activeElement : null;
     // Opened from inside another dialog: keep that one's origin. Otherwise this is a fresh origin (maybe none).
     if (!(a instanceof HTMLElement && a.closest('[role=dialog]'))) baseFocus = a instanceof HTMLElement && a !== document.body ? a : null;
-    return baseFocus;
+    return a instanceof HTMLElement && a !== document.body ? a : null;
   });
 
   // Make sure focus is inside the dialog before the first paint (children may focus a specific input).
@@ -31,6 +31,8 @@ export function Overlay(props: { label: string; wide?: boolean; onBackdrop?: () 
   useLayoutEffect(() => () => {
     const a = document.activeElement;
     const free = a === null || a === document.body || !!box.current?.contains(a);
+    // Stacked dialogs: go back into the dialog that opened this one if it is still there, else to the origin.
+    const returnTo = opener?.isConnected && opener.closest('[role=dialog]') ? opener : baseFocus;
     if (free && returnTo?.isConnected) returnTo.focus();
   }, []);
 

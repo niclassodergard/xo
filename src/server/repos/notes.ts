@@ -2,15 +2,16 @@ import type { DatabaseSync } from 'node:sqlite';
 import { LIMITS } from '../../shared/api.ts';
 import type { NoteSummary } from '../../shared/api.ts';
 import type { Id, Note } from '../../shared/types.ts';
+import { assertLiveProject } from './actions.ts';
 
 interface NoteRow {
-  id: number; title: string; body_md: string; person_id: number | null;
+  id: number; title: string; body_md: string; person_id: number | null; project_id: number | null;
   created_at: string; updated_at: string;
 }
 
 export function mapNote(r: NoteRow): Note {
   return {
-    id: r.id, title: r.title, bodyMd: r.body_md, personId: r.person_id,
+    id: r.id, title: r.title, bodyMd: r.body_md, personId: r.person_id, projectId: r.project_id,
     createdAt: r.created_at, updatedAt: r.updated_at,
   };
 }
@@ -18,7 +19,7 @@ export function mapNote(r: NoteRow): Note {
 export function toSummary(n: Note): NoteSummary {
   return {
     id: n.id, title: n.title, preview: Array.from(n.bodyMd).slice(0, LIMITS.notePreview).join(''),
-    personId: n.personId, createdAt: n.createdAt, updatedAt: n.updatedAt,
+    personId: n.personId, projectId: n.projectId, createdAt: n.createdAt, updatedAt: n.updatedAt,
   };
 }
 
@@ -29,10 +30,12 @@ export function defaultTitle(bodyMd: string): string {
 }
 
 /** All live notes, full bodies, newest first (for export and internal use; routes use listNoteSummaries). */
-export function listNotes(db: DatabaseSync, opts: { personId?: Id; limit?: number; before?: Id } = {}): Note[] {
+export function listNotes(db: DatabaseSync, opts: { personId?: Id; projectId?: Id | 'none'; limit?: number; before?: Id } = {}): Note[] {
   const where = ['deleted_at IS NULL'];
   const params: number[] = [];
   if (opts.personId !== undefined) { where.push('person_id = ?'); params.push(opts.personId); }
+  if (opts.projectId === 'none') where.push('project_id IS NULL');
+  else if (opts.projectId !== undefined) { where.push('project_id = ?'); params.push(opts.projectId); }
   if (opts.before !== undefined) { where.push('id < ?'); params.push(opts.before); }
   let sql = `SELECT * FROM notes WHERE ${where.join(' AND ')} ORDER BY id DESC`;
   if (opts.limit !== undefined) { sql += ' LIMIT ?'; params.push(opts.limit); }
@@ -42,21 +45,23 @@ export function listNotes(db: DatabaseSync, opts: { personId?: Id; limit?: numbe
 /** Bounded list with body previews (cut in SQL); `before` is an id cursor. */
 export function listNoteSummaries(
   db: DatabaseSync,
-  opts: { personId?: Id; limit?: number; before?: Id } = {},
+  opts: { personId?: Id; projectId?: Id | 'none'; limit?: number; before?: Id } = {},
 ): NoteSummary[] {
   const where = ['deleted_at IS NULL'];
   const params: number[] = [LIMITS.notePreview];
   if (opts.personId !== undefined) { where.push('person_id = ?'); params.push(opts.personId); }
+  if (opts.projectId === 'none') where.push('project_id IS NULL');
+  else if (opts.projectId !== undefined) { where.push('project_id = ?'); params.push(opts.projectId); }
   if (opts.before !== undefined) { where.push('id < ?'); params.push(opts.before); }
   params.push(opts.limit ?? 100);
   const rows = db
     .prepare(
-      `SELECT id, title, substr(body_md, 1, ?) AS preview, person_id, created_at, updated_at
+      `SELECT id, title, substr(body_md, 1, ?) AS preview, person_id, project_id, created_at, updated_at
        FROM notes WHERE ${where.join(' AND ')} ORDER BY id DESC LIMIT ?`,
     )
-    .all(...params) as unknown as { id: number; title: string; preview: string; person_id: number | null; created_at: string; updated_at: string }[];
+    .all(...params) as unknown as { id: number; title: string; preview: string; person_id: number | null; project_id: number | null; created_at: string; updated_at: string }[];
   return rows.map((r) => ({
-    id: r.id, title: r.title, preview: r.preview, personId: r.person_id, createdAt: r.created_at, updatedAt: r.updated_at,
+    id: r.id, title: r.title, preview: r.preview, personId: r.person_id, projectId: r.project_id, createdAt: r.created_at, updatedAt: r.updated_at,
   }));
 }
 
@@ -65,32 +70,36 @@ export function getNote(db: DatabaseSync, id: Id): Note | null {
   return r ? mapNote(r) : null;
 }
 
+/** @throws ProjectNotFoundError when `projectId` names a missing or deleted project. */
 export function createNote(
   db: DatabaseSync,
-  input: { title?: string; bodyMd: string; personId?: Id | null },
+  input: { title?: string; bodyMd: string; personId?: Id | null; projectId?: Id | null },
   now: Date,
 ): Note {
+  assertLiveProject(db, input.projectId);
   const ts = now.toISOString();
   const title = input.title !== undefined && input.title.trim() !== '' ? input.title.trim() : defaultTitle(input.bodyMd);
   const res = db
-    .prepare('INSERT INTO notes (title, body_md, person_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
-    .run(title, input.bodyMd, input.personId ?? null, ts, ts);
+    .prepare('INSERT INTO notes (title, body_md, person_id, project_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(title, input.bodyMd, input.personId ?? null, input.projectId ?? null, ts, ts);
   return getNote(db, Number(res.lastInsertRowid))!;
 }
 
 export function updateNote(
   db: DatabaseSync,
   id: Id,
-  patch: { title?: string; bodyMd?: string; personId?: Id | null },
+  patch: { title?: string; bodyMd?: string; personId?: Id | null; projectId?: Id | null },
   now: Date,
 ): Note | null {
   const cur = getNote(db, id);
   if (!cur) return null;
+  if (patch.projectId !== undefined && patch.projectId !== cur.projectId) assertLiveProject(db, patch.projectId);
   const title = patch.title !== undefined && patch.title.trim() !== '' ? patch.title.trim() : cur.title;
-  db.prepare('UPDATE notes SET title = ?, body_md = ?, person_id = ?, updated_at = ? WHERE id = ?').run(
+  db.prepare('UPDATE notes SET title = ?, body_md = ?, person_id = ?, project_id = ?, updated_at = ? WHERE id = ?').run(
     title,
     patch.bodyMd ?? cur.bodyMd,
     patch.personId !== undefined ? patch.personId : cur.personId,
+    patch.projectId !== undefined ? patch.projectId : cur.projectId,
     now.toISOString(),
     id,
   );

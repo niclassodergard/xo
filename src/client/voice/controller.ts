@@ -1,6 +1,7 @@
 import { signal } from '@preact/signals';
 import type { Signal } from '@preact/signals';
 import type { PersonLike } from '../../shared/people-match.ts';
+import type { ProjectLike } from '../../shared/project-match.ts';
 import type { VoiceCommand } from '../../shared/types.ts';
 import { RecorderError } from './recorder.ts';
 import type { ActiveRecording } from './recorder.ts';
@@ -20,6 +21,8 @@ export interface VoiceDeps {
   start(opts: { maxMs: number; onMaxLength: () => void; onError: () => void }): Promise<ActiveRecording>;
   upload(blob: Blob, signal: AbortSignal): Promise<{ text: string }>;
   people(): PersonLike[];
+  /** Projects for "open <project>"; omitted = none. */
+  projects?(): ProjectLike[];
   epoch(): number;
   now(): number;
   flash(message: string, kind?: 'info' | 'error'): void;
@@ -27,6 +30,11 @@ export interface VoiceDeps {
   dictate(text: string): void;
   /** True while an overlay, person picker or prompt owns the keyboard: nothing may navigate then. */
   overlayOpen(): boolean;
+  /**
+   * Proof that a key-held recording is still held (a recent auto-repeat keydown). Omitted = no proof: at the
+   * length limit the Send/Discard prompt is shown instead of sending (a keyup can be lost, e.g. behind Cmd).
+   */
+  heldAlive?(): boolean;
   /** Reduce a thrown upload error to the fields the message needs; null = not an API error. */
   failureOf(e: unknown): FailureLike | null;
 }
@@ -97,13 +105,13 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
   }
 
   /**
-   * At the limit a recording whose key is still held is sent. A toggle-started one (touch) is stopped
+   * At the limit a recording whose key is provably still held (`heldAlive`) is sent. A toggle-started one (touch) is stopped
    * and the microphone released, the audio stays in memory, and nothing is sent without an explicit
    * Send. No choice within CHOICE_TIMEOUT_MS discards it.
    */
   function onMaxLength(): void {
     if (state.peek().phase !== 'recording' || !rec) return;
-    if (held) { deps.flash(MAX_LENGTH_MESSAGE); release(); return; }
+    if (held && deps.heldAlive?.() === true) { deps.flash(MAX_LENGTH_MESSAGE); release(); return; }
     const r = rec;
     rec = null;
     const g = ++gen;
@@ -203,7 +211,7 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
   }
 
   async function handleTranscript(text: unknown, e: number): Promise<void> {
-    const action = decideTranscript(text, deps.people());
+    const action = decideTranscript(text, deps.people(), deps.projects?.() ?? []);
     if (action.kind === 'empty') { deps.flash(EMPTY_TRANSCRIPT_MESSAGE); return; }
     if (action.kind === 'dictation') { deps.dictate(action.text); return; }
     // Never navigate or start a meeting underneath an open overlay: keep the words as dictation.

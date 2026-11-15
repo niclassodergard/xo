@@ -9,7 +9,7 @@ import { migrate } from '../src/server/db/migrate.ts';
 import { openDb } from '../src/server/db/open.ts';
 import type { AppDeps } from '../src/server/deps.ts';
 import { installErrorHandler, notFoundHandler } from '../src/server/errors.ts';
-import { FakeClassifier, FakeTranscriber } from '../src/server/llm/fake.ts';
+import { FakeAnswerer, FakeClassifier, FakeTranscriber } from '../src/server/llm/fake.ts';
 
 export const TEST_ORIGIN = 'http://localhost:5173';
 export const FIXED_NOW = new Date('2026-01-15T12:00:00.000Z');
@@ -42,6 +42,7 @@ export function makeDeps(overrides: Partial<AppDeps> = {}): AppDeps {
     db: makeTestDb(),
     classifier: new FakeClassifier(),
     transcriber: new FakeTranscriber(),
+    answerer: new FakeAnswerer(),
     now: () => FIXED_NOW,
     ...overrides,
   };

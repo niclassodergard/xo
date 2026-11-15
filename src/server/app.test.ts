@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance, RouteOptions } from 'fastify';
 import { makeDeps, makeRouteApp } from '../../test/helpers.ts';
@@ -90,6 +93,63 @@ describe('buildApp', () => {
     expect(seen.some((x) => x.includes('GET') && x.endsWith(' /api/health'))).toBe(true);
     expect(seen).toContain('GET /api/people/:id');
     expect(seen).toContain('POST /api/notes');
+  });
+});
+
+describe('clientDir option', () => {
+  it('serves the SPA from another directory, and the guard still holds', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'xo-client-'));
+    try {
+      writeFileSync(join(dir, 'index.html'), '<!doctype html><title>other-client</title>');
+      writeFileSync(join(dir, 'app.js'), 'console.log(1)');
+      app = await buildApp(makeDeps(), { clientDir: dir });
+      const html = await app.inject({ method: 'GET', url: '/#/x', headers: { accept: 'text/html' } });
+      expect(html.statusCode).toBe(200);
+      expect(html.body).toContain('other-client');
+      const js = await app.inject({ method: 'GET', url: '/app.js' });
+      expect(js.statusCode).toBe(200);
+      // a deep link falls back to index.html; API paths do not
+      const deep = await app.inject({ method: 'GET', url: '/people/5', headers: { accept: 'text/html' } });
+      expect(deep.body).toContain('other-client');
+      const api = await app.inject({ method: 'GET', url: '/api/projects' });
+      expect(api.statusCode).toBe(401);
+      expect(api.body).not.toContain('other-client');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the route tripwire installed when clientDir is used', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'xo-client-'));
+    try {
+      writeFileSync(join(dir, 'index.html'), 'x');
+      app = await buildApp(makeDeps(), { clientDir: dir });
+      expect(() => app!.get('/api/rootlevel', async () => ({ secret: 'x' }))).toThrow(/guarded/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not serve files outside the directory', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'xo-client-'));
+    try {
+      writeFileSync(join(dir, 'index.html'), 'x');
+      app = await buildApp(makeDeps(), { clientDir: dir });
+      for (const url of ['/../package.json', '/%2e%2e/package.json', '/..%2fpackage.json']) {
+        const res = await app.inject({ method: 'GET', url });
+        expect(res.body).not.toContain('"name"');
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('registers the projects routes behind the guard', async () => {
+    app = await buildApp(makeDeps());
+    for (const [method, url] of [['GET', '/api/projects'], ['POST', '/api/projects'], ['GET', '/api/projects/1'], ['PUT', '/api/projects/1/people/2']] as const) {
+      const res = await app.inject({ method, url });
+      expect(res.statusCode, `${method} ${url}`).toBe(401);
+    }
   });
 });
 

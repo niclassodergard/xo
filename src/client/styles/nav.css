@@ -1,0 +1,7 @@
+/* Sidebar Pinned / Recents and the search palette (step C2). Tokens only. */
+.side-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.side-archived { font-size: 0.8em; }
+.side-empty { padding: var(--s1) var(--s3); }
+.side-group > .side-title { cursor: pointer; }
+.side-group > .side-title:hover { color: var(--fg); }
+.palette-sub { font-size: 0.875em; }

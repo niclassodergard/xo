@@ -33,7 +33,7 @@ async function main(): Promise<void> {
   const purge = (): void => {
     try {
       const n = purgeDeleted(db, deps.now());
-      if (n.notes + n.actions + n.agendaItems + n.captures > 0) app.log.info({ purged: n }, 'purged soft-deleted items');
+      if (n.notes + n.actions + n.agendaItems + n.captures + n.projects > 0) app.log.info({ purged: n }, 'purged soft-deleted items');
     } catch (err) {
       app.log.error(`purge failed: ${err instanceof Error ? err.name : 'unknown error'}`);
     }

@@ -7,6 +7,7 @@ import { HttpError } from '../errors.ts';
 import { createAction, getAction, listActions, softDeleteAction, updateAction } from '../repos/actions.ts';
 import { getMeeting } from '../repos/meetings.ts';
 import { getPerson } from '../repos/people.ts';
+import { getProject } from '../repos/projects.ts';
 
 const ID = { type: 'string', pattern: '^[0-9]{1,15}$' } as const;
 const idParams = { type: 'object', required: ['id'], additionalProperties: false, properties: { id: ID } } as const;
@@ -27,23 +28,32 @@ export default async function routes(app: FastifyInstance, opts: { deps: AppDeps
     }
   }
 
-  app.get<{ Querystring: { status?: 'open' | 'done' | 'all'; owner?: Owner; personId?: string; limit?: string; before?: string } }>(
+  function checkProject(projectId: number | null | undefined): void {
+    if (projectId !== null && projectId !== undefined && !getProject(deps.db, projectId)) {
+      throw new HttpError(400, 'validation_error', 'Project does not exist');
+    }
+  }
+
+  app.get<{ Querystring: { status?: 'open' | 'done' | 'all'; owner?: Owner; personId?: string; projectId?: string; limit?: string; before?: string } }>(
     '/actions',
     {
       schema: {
         querystring: {
           type: 'object', additionalProperties: false,
-          properties: { status: { type: 'string', enum: ['open', 'done', 'all'] }, owner, personId: ID, limit: LIMIT_PARAM, before: ID },
+          properties: {
+            status: { type: 'string', enum: ['open', 'done', 'all'] }, owner, personId: ID,
+            projectId: { type: 'string', pattern: '^([0-9]{1,15}|none)$' }, limit: LIMIT_PARAM, before: ID },
         },
       },
     },
     async (req) => {
-      const { status, owner: o, personId, limit, before } = req.query;
+      const { status, owner: o, personId, projectId, limit, before } = req.query;
       return {
         actions: listActions(deps.db, {
           ...(status !== undefined ? { status } : {}),
           ...(o !== undefined ? { owner: o } : {}),
           ...(personId !== undefined ? { personId: Number(personId) } : {}),
+          ...(projectId !== undefined ? { projectId: projectId === 'none' ? ('none' as const) : Number(projectId) } : {}),
           limit: limit !== undefined ? Number(limit) : 100,
           ...(before !== undefined ? { before: Number(before) } : {}),
         }),
@@ -58,13 +68,14 @@ export default async function routes(app: FastifyInstance, opts: { deps: AppDeps
         querystring: noQuery,
         body: {
           type: 'object', required: ['text'], additionalProperties: false,
-          properties: { text, owner, personId: nullableId, meetingId: nullableId },
+          properties: { text, owner, personId: nullableId, meetingId: nullableId, projectId: nullableId },
         },
       },
     },
     async (req, reply) => {
       if (req.body.text.trim() === '') throw new HttpError(400, 'validation_error', 'text must not be blank');
       checkPerson(req.body.personId);
+      checkProject(req.body.projectId);
       let personId = req.body.personId ?? null;
       if (req.body.meetingId !== undefined && req.body.meetingId !== null) {
         // A follow-up belongs to the meeting's person: default to it, reject an explicit mismatch.
@@ -87,7 +98,7 @@ export default async function routes(app: FastifyInstance, opts: { deps: AppDeps
         querystring: noQuery,
         body: {
           type: 'object', additionalProperties: false, minProperties: 1,
-          properties: { text, owner, status: { type: 'string', enum: ['open', 'done'] }, personId: nullableId },
+          properties: { text, owner, status: { type: 'string', enum: ['open', 'done'] }, personId: nullableId, projectId: nullableId },
         },
       },
     },
@@ -98,6 +109,7 @@ export default async function routes(app: FastifyInstance, opts: { deps: AppDeps
       checkPerson(req.body.personId);
       const cur = getAction(deps.db, Number(req.params.id));
       if (!cur) throw notFound();
+      if (req.body.projectId !== cur.projectId) checkProject(req.body.projectId);
       if (cur.meetingId !== null && req.body.personId !== undefined) {
         const meeting = getMeeting(deps.db, cur.meetingId);
         if (meeting && req.body.personId !== meeting.personId) {

@@ -1,125 +1,83 @@
-import type { ComponentType } from 'preact';
-import { useEffect } from 'preact/hooks';
-import type { MeetingDetail, Person } from '../shared/types.ts';
+import { useEffect, useLayoutEffect } from 'preact/hooks';
+import { ItemPicker } from './components/ItemPicker.tsx';
+import { Confirm } from './components/Confirm.tsx';
 import { Help } from './components/Help.tsx';
-import { Overlay } from './components/Overlay.tsx';
 import { Palette } from './components/Palette.tsx';
-import { Pane } from './components/Pane.tsx';
-import { PersonPicker } from './components/PersonPicker.tsx';
 import { Prompt } from './components/Prompt.tsx';
-import { StatusBar } from './components/StatusBar.tsx';
-import { api } from './lib/api.ts';
-import { installKeyListeners, mode, registerCommand, useKeys } from './lib/keys.ts';
-import { back, navigate, route } from './lib/router.ts';
+import { createPerson, createProject, startMeeting } from './lib/commands.ts';
+import { focusTarget } from './lib/focus.ts';
+import { installKeyListeners, isTextEntry, registerCommand, useKeys } from './lib/keys.ts';
+import { KEY_COMPOSER, KEY_COMPOSER_ALT, KEY_ESC, KEY_PALETTE, KEY_SIDEBAR } from './lib/keymap.ts';
 import {
-  appPhase, askText, booted, closeOverlay, epoch, errorText, flash, focusChatInput, focusSearchInput, initAuthChannel, logout,
-  overlay, personPicker, pickPerson, promptRequest, refreshPeople, restoreSession, revalidateSession,
-  session, shellActive, toggleHelp, togglePalette, undoLastCapture,
+  chatVisible, escAction, goToComposer, panelExpanded, sidebarOpen, singlePanel, toggleExpanded, toggleSidebar,
+} from './lib/layout.ts';
+import { openDoc } from './lib/nav.ts';
+import { closePanel, isPanelRoute, navigate, route } from './lib/router.ts';
+import {
+  appPhase, askPick, askText, booted, confirmRequest, initAuthChannel, logout, overlay, pickRequest, promptRequest,
+  refreshNav, refreshPeople, refreshProjects, restoreSession, revalidateSession, session, shellActive, togglePalette,
+  toggleHelp,
 } from './lib/store.ts';
-import Actions from './views/Actions.tsx';
-import Chat from './views/Chat.tsx';
+import { Panel } from './shell/Panel.tsx';
+import { Sidebar } from './shell/Sidebar.tsx';
+import { Toasts } from './shell/Toasts.tsx';
+import Composer from './stream/Composer.tsx';
+import Stream from './stream/Stream.tsx';
 import Login from './views/Login.tsx';
-import Meeting from './views/Meeting.tsx';
-import NoteDetail from './views/NoteDetail.tsx';
-import Notes from './views/Notes.tsx';
-import People from './views/People.tsx';
-import PersonView from './views/Person.tsx';
-import Search from './views/Search.tsx';
-import { cycleView } from './views/nav-logic.ts';
 import { initVoice } from './voice/index.ts';
+import VoiceStatus from './voice/VoiceStatus.tsx';
 
-const VIEWS: Record<string, ComponentType> = {
-  chat: Chat, actions: Actions, notes: Notes, note: NoteDetail, people: People, person: PersonView, meeting: Meeting, search: Search,
-};
-const TITLES: Record<string, string> = {
-  chat: 'Chat', actions: 'Actions', notes: 'Notes', note: 'Note', people: 'People', person: 'Person', meeting: '1-1', search: 'Search',
-  notfound: 'Not found',
-};
-const NAV = [
-  { href: '/chat', label: 'Chat', keys: 'g c', names: ['chat'] },
-  { href: '/actions', label: 'Actions', keys: 'g a', names: ['actions'] },
-  { href: '/notes', label: 'Notes', keys: 'g n', names: ['notes', 'note'] },
-  { href: '/people', label: 'People', keys: 'g p', names: ['people', 'person', 'meeting'] },
-];
-
-async function startMeetingWith(p: Person): Promise<void> {
-  const e = epoch();
-  try {
-    const m = await api.post<MeetingDetail>(`/api/people/${p.id}/meetings`);
-    if (e === epoch()) navigate(`/meetings/${m.meeting.id}`);
-  } catch (err) {
-    if (e === epoch()) flash(errorText(err), 'error');
+/** Esc once no overlay or recording took it (those register modal layers, which win): see escAction(). */
+function globalEsc(): void {
+  const a = document.activeElement;
+  const inPanelField = isTextEntry(a) && !!a?.closest('[data-region="panel"]');
+  const act = escAction({ textEntryInPanel: inPanelField, panelOpen: isPanelRoute(route.peek()) });
+  if (act === 'blur-field') {
+    (a as HTMLElement).blur();
+    focusTarget('panel', { queue: false });
+  } else if (act === 'close-panel') {
+    closePanel();
+    focusTarget('composer'); // queued: in single-panel mode the composer renders after the route change
+  } else {
+    focusTarget('composer', { queue: false });
   }
-}
-
-async function createPerson(name: string): Promise<void> {
-  const e = epoch();
-  try {
-    const p = await api.post<Person>('/api/people', { name });
-    if (e !== epoch()) return;
-    await refreshPeople();
-    if (e === epoch()) navigate(`/people/${p.id}`);
-  } catch (err) {
-    if (e === epoch()) flash(errorText(err), 'error');
-  }
-}
-
-function blurActive(): void {
-  if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
-  mode.value = 'normal';
 }
 
 function GlobalKeys(props: { enabled: boolean }) {
-  const { enabled } = props;
   useKeys({
-    'g c': () => navigate('/chat'),
-    'g a': () => navigate('/actions'),
-    'g n': () => navigate('/notes'),
-    'g p': () => navigate('/people'),
-    i: () => { navigate('/chat'); focusChatInput(); },
-    '/': () => { navigate('/search'); focusSearchInput(); },
-    ':': togglePalette,
-    '?': toggleHelp,
-    left: () => navigate(cycleView(NAV, route.peek().name, -1)),
-    right: () => navigate(cycleView(NAV, route.peek().name, 1)),
+    [KEY_PALETTE]: togglePalette,
+    [KEY_COMPOSER]: goToComposer,
+    [KEY_COMPOSER_ALT]: goToComposer,
+    [KEY_SIDEBAR]: toggleSidebar,
+    [KEY_ESC]: globalEsc,
   }, {
-    scope: 'global', enabled,
+    scope: 'global', enabled: props.enabled,
     descriptions: {
-      'g c': 'go to chat', 'g a': 'go to actions', 'g n': 'go to notes', 'g p': 'go to people',
-      i: 'chat input', '/': 'search', ':': 'command palette', '?': 'help',
-      left: 'previous view (Chat · Actions · Notes · People)', right: 'next view (Chat · Actions · Notes · People)',
+      [KEY_PALETTE]: 'search and commands', [KEY_COMPOSER]: 'new capture', [KEY_COMPOSER_ALT]: 'new capture (best effort)',
+      [KEY_SIDEBAR]: 'toggle sidebar', [KEY_ESC]: 'close / leave field / focus composer',
     },
-  });
-  useKeys({
-    'ctrl+k': () => togglePalette(),
-    esc: () => {
-      if (overlay.value) closeOverlay();
-      else if (mode.value === 'insert') blurActive();
-      else back();
-    },
-  }, {
-    scope: 'global', enabled, modes: ['normal', 'insert', 'command'],
-    descriptions: { 'ctrl+k': 'command palette', esc: 'close / leave input / back' },
   });
   return null;
 }
 
 function useBuiltinCommands(enabled: boolean): void {
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!enabled) return undefined;
-    const go = (id: string, title: string, path: string, kw: string[]) =>
-      registerCommand({ id, title, run: () => navigate(path), keywords: kw });
+    const go = (id: string, title: string, run: () => void, keywords: string[] = []) => registerCommand({ id, title, run, keywords });
     const offs = [
-      go('go.chat', 'Go to Chat', '/chat', ['home']),
-      go('go.actions', 'Go to Actions', '/actions', ['todo', 'tasks']),
-      go('go.notes', 'Go to Notes', '/notes', []),
-      go('go.people', 'Go to People', '/people', []),
-      go('go.search', 'Search', '/search', ['find']),
-      registerCommand({ id: 'meeting.start', title: 'Start 1-1 with…', keywords: ['meeting', 'one on one'], run: () => pickPerson((p) => { personPicker.value = null; void startMeetingWith(p); }) }),
-      registerCommand({ id: 'person.new', title: 'New person', keywords: ['add'], run: () => askText('New person', (name) => { void createPerson(name); }) }),
-      registerCommand({ id: 'capture.undo', title: 'Undo last capture', run: () => { void undoLastCapture(); } }),
-      registerCommand({ id: 'help', title: 'Help', keywords: ['keys', 'bindings'], run: toggleHelp }),
-      registerCommand({ id: 'logout', title: 'Log out', keywords: ['sign out'], run: () => { void logout(); } }),
+      go('go.home', 'Go to conversation', () => { navigate('/'); }, ['home', 'chat']),
+      go('go.actions', 'Go to Actions', () => openDoc({ kind: 'actions' }), ['todo', 'tasks']),
+      go('go.notes', 'Go to Notes', () => openDoc({ kind: 'notes' })),
+      go('go.people', 'Go to People', () => openDoc({ kind: 'people' })),
+      go('go.projects', 'Go to Projects', () => openDoc({ kind: 'projects' })),
+      go('meeting.start', 'Start 1-1 with…', () => askPick('person', (id) => { void startMeeting(id); }), ['meeting', 'one on one']),
+      go('person.new', 'New person', () => askText('New person', (name) => { void createPerson(name); }), ['add']),
+      go('project.new', 'New project', () => askText('New project', (title) => { void createProject(title); }), ['add']),
+      go('sidebar.toggle', 'Toggle sidebar', toggleSidebar, ['drawer', 'menu']),
+      go('panel.expand', 'Expand or collapse the document', () => { if (isPanelRoute(route.peek()) && !singlePanel.peek()) toggleExpanded(); }, ['panel', 'wide']),
+      go('panel.close', 'Close the document', () => { if (isPanelRoute(route.peek())) closePanel(); }, ['panel']),
+      go('help', 'Shortcuts', toggleHelp, ['keys', 'bindings', 'help']),
+      go('logout', 'Log out', () => { void logout(); }, ['sign out']),
     ];
     return () => offs.forEach((off) => off());
   }, [enabled]);
@@ -144,10 +102,16 @@ export function App() {
 
   const loggedIn = session.value !== null;
   const token = session.value?.csrfToken;
-  useEffect(() => { if (token) void refreshPeople(); }, [token]);
-  useBuiltinCommands(loggedIn);
-  // Voice bindings exist only while a session exists (never on the Login screen).
   useEffect(() => {
+    if (!token) return;
+    void refreshPeople();
+    void refreshProjects();
+    void refreshNav();
+  }, [token]);
+  useBuiltinCommands(loggedIn);
+  // Voice bindings exist only while a session exists (never on the Login screen). Layout effect:
+  // key layers must exist before the first keystroke after paint (CLAUDE.md).
+  useLayoutEffect(() => {
     if (!loggedIn) return undefined;
     const cleanup = initVoice();
     return typeof cleanup === 'function' ? cleanup : undefined;
@@ -156,45 +120,47 @@ export function App() {
   const phase = appPhase(booted.value, shellActive.value, loggedIn);
   if (phase === 'boot') return <div class="boot">XO …</div>;
   if (phase === 'login') return <Login />;
-  // After a 401 the shell stays (hidden, inert) with Login on top, and the views are unmounted so no
-  // server-loaded content remains in the DOM. Drafts live in store signals (see store.ts, convention 2).
+  // After a 401 the shell stays (hidden, inert) with Login on top; the stream and the panel are unmounted so no
+  // server-loaded content remains in the DOM. Typed text lives in store signals (see store.ts, convention 2).
   const locked = phase === 'locked';
 
-  const r = route.value;
-  const View = VIEWS[r.name];
-  const picker = personPicker.value;
+  const panelOpen = isPanelRoute(route.value);
+  const single = singlePanel.value;
+  const expanded = panelOpen && !single && panelExpanded.value;
+  const sidebar = sidebarOpen.value;
+  const showChat = chatVisible(panelOpen, single, expanded);
+  const pick = pickRequest.value;
+
   return (
     <>
-    <div class={`app${locked ? ' locked' : ''}`} aria-hidden={locked ? 'true' : undefined} ref={(el) => { if (el) el.inert = locked; }}>
+    <div
+      class={`app${locked ? ' locked' : ''}`} data-single={String(single)} data-sidebar={sidebar ? 'open' : 'closed'}
+      data-panel={panelOpen ? 'open' : 'closed'} data-expanded={String(expanded)}
+      aria-hidden={locked ? 'true' : undefined} ref={(el) => { if (el) el.inert = locked; }}
+    >
       <GlobalKeys enabled={!locked} />
-      <header class="header">
-        <span class="brand">XO</span>
-        <span class="dim"> · </span>
-        <span class="title">{TITLES[r.name] ?? ''}</span>
-        <span class="spacer" />
-        <button type="button" class="tbtn" onClick={() => { void logout(); }}>log out</button>
-      </header>
-      <nav class="nav" aria-label="Views">
-        <Pane title="XO">
-          {NAV.map((n) => (
-            <a key={n.href} href={`#${n.href}`} class={`navlink${n.names.includes(r.name) ? ' active' : ''}`}>
-              <span>{n.label}</span><span class="dim keyhint">{n.keys}</span>
-            </a>
-          ))}
-        </Pane>
-      </nav>
+      <Sidebar />
       <main class="main">
-        {locked ? null : View ? <View key={`${r.name}:${r.params.id ?? ''}`} /> : <Pane title="Not found">No such view. Press g c for chat.</Pane>}
+        {(!sidebar || single) && showChat && (
+          <button type="button" class="icon-btn sidebar-toggle" aria-label="Show sidebar" title="Show sidebar (Cmd-B)" onClick={toggleSidebar}>☰</button>
+        )}
+        {!locked && showChat && (
+          <section class="chat-col" aria-label="Chat">
+            <div class="chat-inner">
+              <Stream />
+              <Composer />
+            </div>
+          </section>
+        )}
+        {!locked && panelOpen && <Panel />}
       </main>
-      <StatusBar />
+      <Toasts />
+      {!locked && <VoiceStatus />}
       {overlay.value === 'palette' && <Palette />}
       {overlay.value === 'help' && <Help />}
-      {picker && (
-        <Overlay label="Pick person">
-          <PersonPicker onPick={(p) => { personPicker.value = null; picker.onPick(p); }} onCancel={() => { personPicker.value = null; }} />
-        </Overlay>
-      )}
+      {pick && <ItemPicker kind={pick.kind} onPick={(id) => { pickRequest.value = null; pick.onPick(id); }} onCancel={() => { pickRequest.value = null; }} />}
       {promptRequest.value && <Prompt />}
+      {confirmRequest.value && <Confirm />}
     </div>
     {locked && <div class="lock"><Login /></div>}
     </>

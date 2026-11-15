@@ -1,12 +1,15 @@
-import { effect } from '@preact/signals';
+import { effect, signal } from '@preact/signals';
 import { LIMITS } from '../../shared/api.ts';
 import { api, ApiError } from '../lib/api.ts';
-import { engine, isTextEntry, mode, onKeyUp, registerCommand } from '../lib/keys.ts';
-import { navigate, route } from '../lib/router.ts';
+import { engine, focusContext, isTextEntry, keystrokeMark, onKeyUp, registerCommand, typedSince } from '../lib/keys.ts';
+import { KEY_PTT, KEY_PTT_ANYWHERE } from '../lib/keymap.ts';
+import { goToComposer } from '../lib/layout.ts';
+import { startMeeting } from '../lib/commands.ts';
+import { openDocAsync } from '../lib/nav.ts';
+import { closePanel } from '../lib/router.ts';
 import {
-  appendVoiceDraft, chatDraft, epoch, flash, focusChatInput, overlay, people, personPicker, promptRequest, session,
+  appendVoiceDraft, chatDraft, confirmRequest, epoch, flash, overlay, people, personName, pickRequest, projectTitle, projects, promptRequest, session,
 } from '../lib/store.ts';
-import type { MeetingDetail } from '../../shared/types.ts';
 import { createVoiceController } from './controller.ts';
 import type { VoiceController } from './controller.ts';
 import { startRecording } from './recorder.ts';
@@ -14,7 +17,7 @@ import { fitDraft } from './voice-logic.ts';
 
 // Voice: push-to-talk, dictation and voice commands.
 //
-// Keys: hold Space (NORMAL mode) or Alt+Space (any mode) to record, release to transcribe. While a
+// Keys: hold Space (focus not in a text field or on a button) or Option-Space (anywhere) to record, release to transcribe. While a
 // recording or transcription is active a `modal` key layer is registered: Esc cancels (and does not
 // reach the global Esc handler), Space/Alt+Space keep working (a second press stops a recording that
 // the mic button or palette started). The mic button in the status line and the "Dictate" palette
@@ -24,43 +27,64 @@ import { fitDraft } from './voice-logic.ts';
 // for an explicit Send (Enter) or Discard (Esc); it is discarded after 60 s or on hidden/blur/session end.
 // A recording is also discarded when the page is hidden or loses focus.
 
-const overlayOpen = (): boolean => overlay.peek() !== null || personPicker.peek() !== null || promptRequest.peek() !== null;
+const overlayOpen = (): boolean =>
+  overlay.peek() !== null || pickRequest.peek() !== null || promptRequest.peek() !== null || confirmRequest.peek() !== null;
 
-function personName(id: number): string {
-  return people.peek().find((p) => p.id === id)?.name ?? 'person';
-}
+/** True while Enter sends the recording at the Send/Discard prompt (the prompt shows the hint only then). */
+export const sendByEnter = signal(false);
 
 let controller: VoiceController | null = null;
+/** Keystroke count when the current recording was sent for transcription (see runCommand). */
+let transcribeMark: number | null = null;
+/** A key held for push-to-talk counts as still held only with an auto-repeat keydown this recent. */
+const HELD_PROOF_MS = 1000;
+/** Typing this recently when the Send/Discard prompt appears: Enter is not armed yet (it would send the draft). */
+const TYPING_QUIET_MS = 1500;
+let heldProofAt = 0;
+let lastTypedAt = 0;
+/** Which key a push-to-talk recording is held by (null: not held, e.g. started by the mic button). */
+let heldBy: 'space' | 'alt+space' | null = null;
 
 function getController(): VoiceController {
   controller ??= createVoiceController({
     start: (o) => startRecording(o),
     upload: (blob, signal) => api.postAudio('/api/voice/transcribe', blob, signal),
     people: () => people.value,
+    projects: () => projects.value,
+    heldAlive: () => heldBy !== null && Date.now() - heldProofAt < HELD_PROOF_MS,
     epoch,
     now: () => Date.now(),
     flash,
     overlayOpen,
     failureOf: (e) => (e instanceof ApiError ? { status: e.status, code: e.code, retryAfter: e.retryAfter } : null),
     dictate(text) {
+      // Typed since the audio was sent: the words only join the draft; no navigation, no focus change.
+      const mark = transcribeMark ?? keystrokeMark();
+      transcribeMark = null;
+      const typed = typedSince(mark);
       const fit = fitDraft(chatDraft.value, text);
       appendVoiceDraft(fit.draft);
       if (fit.truncated) flash(`Dictation cut at ${LIMITS.captureText} characters.`, 'error');
-      if (overlayOpen()) { // never navigate or steal focus from an open overlay
+      if (overlayOpen() || typed) { // never navigate or steal focus from an open overlay or from typing
         if (!fit.truncated) flash('Dictation added to chat');
         return;
       }
-      if (route.peek().name !== 'chat') navigate('/chat');
-      focusChatInput();
+      goToComposer(); // single-panel mode with a document open goes to the chat first
     },
     async runCommand(cmd) {
-      if (cmd.type === 'goto') { navigate(`/${cmd.view}`); flash(`Voice: opened ${cmd.view}`); return; }
-      if (cmd.type === 'open_person') { navigate(`/people/${cmd.personId}`); flash(`Voice: opened ${personName(cmd.personId)}`); return; }
+      // Typing during the transcription must not lose its focus to the opened document: the mark is the one
+      // taken when the audio was sent, else now. openDocAsync leaves focus alone when the user typed since.
+      const mark = transcribeMark ?? keystrokeMark();
+      transcribeMark = null;
+      if (cmd.type === 'goto') {
+        if (cmd.view === 'home') { closePanel(); flash('Voice: opened chat'); } else { openDocAsync({ kind: cmd.view }, mark); flash(`Voice: opened ${cmd.view}`); }
+        return;
+      }
+      if (cmd.type === 'open_person') { openDocAsync({ kind: 'person', id: cmd.personId }, mark); flash(`Voice: opened ${personName(cmd.personId) ?? 'person'}`); return; }
+      if (cmd.type === 'open_project') { openDocAsync({ kind: 'project', id: cmd.projectId }, mark); flash(`Voice: opened ${projectTitle(cmd.projectId) ?? 'project'}`); return; }
       const e = epoch();
-      const detail = await api.post<MeetingDetail>(`/api/people/${cmd.personId}/meetings`);
-      if (e !== epoch()) return;
-      navigate(`/meetings/${detail.meeting.id}`);
-      flash(`Voice: started 1-1 with ${personName(cmd.personId)}`);
+      await startMeeting(cmd.personId, mark);
+      if (e === epoch()) flash(`Voice: started 1-1 with ${personName(cmd.personId) ?? 'person'}`);
     },
   });
   return controller;
@@ -80,61 +104,104 @@ export function toggleDictation(): void {
 
 export function initVoice(): () => void {
   const c = getController();
-  let heldBy: 'space' | 'alt+space' | null = null;
+  heldBy = null;
   c.enable();
 
   const down = (by: 'space' | 'alt+space') => (e: KeyboardEvent): void => {
     if (e?.repeat) return; // auto-repeat while held
     const p = c.state.peek().phase;
-    if (p === 'idle') { heldBy = by; c.press({ held: true }); }
+    if (p === 'idle') { heldBy = by; heldProofAt = Date.now(); c.press({ held: true }); }
     else if (p === 'recording' || p === 'starting') { if (heldBy === null) c.release(); } // stops a toggle-started recording
     else c.press(); // transcribing: shows "still transcribing"
   };
   const removeBase = [
-    engine.addLayer({ scope: 'global', modes: ['normal'], bindings: [{ spec: 'space', run: down('space'), description: 'Hold to talk (push-to-talk)' }] }),
-    engine.addLayer({ scope: 'global', modes: ['normal', 'insert', 'command'], bindings: [{ spec: 'alt+space', run: down('alt+space'), description: 'Hold to talk (any mode)' }] }),
+    engine.addLayer({ scope: 'global', bindings: [{ spec: KEY_PTT, run: down('space'), description: 'Hold to talk (push-to-talk)' }] }),
+    engine.addLayer({ scope: 'global', bindings: [{ spec: KEY_PTT_ANYWHERE, run: down('alt+space'), description: 'Hold to talk (anywhere)' }] }),
   ];
 
-  // Active (starting/recording/transcribing): a modal layer takes Esc before the global handler can,
+  // Active (starting/recording/transcribing/confirming): a modal layer takes Esc before the global handler can,
   // and keeps Space/Alt+Space from falling through (page scroll) while lower layers are blocked.
   let removeModal: (() => void)[] | null = null;
   const cancelByKey = (): void => { heldBy = null; c.cancel(); };
-  // At the Send/Discard prompt a text field must not hold focus: in INSERT mode the modal Enter/Esc layer would
-  // not see Enter, and the field would act on it (chat would send the draft). Blur it, put it back afterwards.
+
+  // Enter sends the recording only while the Send/Discard prompt is on screen AND the user is not typing: the
+  // engine leaves Enter to a focused text field, so the field is blurred when Enter is armed (else the composer
+  // would send the draft), and put back afterwards. If the user typed within TYPING_QUIET_MS of the prompt
+  // appearing, the prompt stays (Send/Discard are buttons) and Enter is armed once typing has stopped.
   let blurred: HTMLElement | null = null;
+  let removeEnter: (() => void) | null = null;
+  let armTimer: ReturnType<typeof setTimeout> | undefined;
+  const arm = (): void => {
+    armTimer = undefined;
+    if (c.state.peek().phase !== 'confirming' || removeEnter) return;
+    // A focused text field, button or link would take Enter itself (send the draft / click): drop its focus, except
+    // inside the prompt itself.
+    const active = document.activeElement as HTMLElement | null;
+    if (!blurred && active && !active.closest?.('.voice-status') && (isTextEntry(active) || focusContext(active, active).nativeActivation)) {
+      blurred = active;
+      blurred.blur();
+    }
+    sendByEnter.value = true;
+    removeEnter = engine.addLayer({
+      scope: 'modal',
+      // Ignore key repeat: a held Enter must never count as the explicit Send.
+      bindings: [{ spec: 'enter', run: (e) => { if (!e.repeat) c.send(); }, description: 'Send the recording that reached the limit' }],
+    });
+  };
+  const armWhenQuiet = (): void => {
+    const wait = TYPING_QUIET_MS - (Date.now() - lastTypedAt);
+    if (wait <= 0) arm();
+    else armTimer = setTimeout(armWhenQuiet, wait);
+  };
+  const disarm = (): void => {
+    clearTimeout(armTimer);
+    armTimer = undefined;
+    removeEnter?.();
+    removeEnter = null;
+    sendByEnter.value = false;
+  };
   const stopWatch = effect(() => {
     const phase = c.state.value.phase;
-    if (phase === 'confirming' && !blurred && isTextEntry(document.activeElement)) {
-      blurred = document.activeElement as HTMLElement;
-      blurred.blur();
-      mode.value = 'normal';
-    } else if (phase === 'idle' && blurred) {
-      const el = blurred;
-      blurred = null;
-      const a = document.activeElement;
-      if (el.isConnected && (a === null || a === document.body)) el.focus();
+    if (phase === 'confirming') {
+      if (!removeEnter && armTimer === undefined) armWhenQuiet();
+    } else {
+      disarm();
+      if (phase === 'idle' && blurred) {
+        const el = blurred;
+        blurred = null;
+        const a = document.activeElement;
+        if (el.isConnected && (a === null || a === document.body)) el.focus();
+      }
     }
+    if (phase === 'starting') transcribeMark = null;
+    else if (phase === 'transcribing' && transcribeMark === null) transcribeMark = keystrokeMark();
     const active = phase !== 'idle';
     if (active && !removeModal) {
       removeModal = [
         engine.addLayer({
-          scope: 'modal', modes: ['normal', 'insert', 'command'],
-          bindings: [{ spec: 'esc', run: cancelByKey, description: 'Cancel recording' }, { spec: 'alt+space', run: down('alt+space') }],
+          scope: 'modal',
+          bindings: [{ spec: 'esc', run: cancelByKey, description: 'Cancel recording' }, { spec: KEY_PTT_ANYWHERE, run: down('alt+space') }],
         }),
-        engine.addLayer({
-          scope: 'modal', modes: ['normal'],
-          bindings: [
-            { spec: 'space', run: down('space') },
-            // Ignore key repeat: a held Enter must never count as the explicit Send.
-            { spec: 'enter', run: (e) => { if (!e.repeat) c.send(); }, description: 'Send the recording that reached the limit' },
-          ],
-        }),
+        engine.addLayer({ scope: 'modal', bindings: [{ spec: KEY_PTT, run: down('space') }] }),
       ];
     } else if (!active && removeModal) {
       for (const r of removeModal) r();
       removeModal = null;
     }
   });
+
+  // Typing time (for the Enter arming above) and proof that a held key is really held: macOS suppresses the
+  // keyup of Space while Cmd is down, so a hold counts as alive only with a recent auto-repeat keydown, and a
+  // keydown with Cmd ends the hold (the recording then needs an explicit stop, or ends at the Send/Discard prompt).
+  const onKeyDown = (e: KeyboardEvent): void => {
+    if (isTextEntry(document.activeElement)) lastTypedAt = Date.now();
+    if (heldBy === null) return;
+    if (e.metaKey) {
+      heldBy = null;
+      if (c.state.peek().phase === 'recording') flash('Recording continues. Press Space or the mic button to stop it.');
+    } else if (e.repeat && e.code === 'Space') heldProofAt = Date.now();
+  };
+  window.addEventListener('keydown', onKeyDown, true);
 
   const offKeyUp = onKeyUp((e) => {
     if (heldBy === null || e.code !== 'Space') return;
@@ -174,6 +241,9 @@ export function initVoice(): () => void {
     document.removeEventListener('visibilitychange', onVisibility);
     window.removeEventListener('pagehide', discard);
     window.removeEventListener('blur', discard);
+    window.removeEventListener('keydown', onKeyDown, true);
+    disarm();
+    blurred = null;
     heldBy = null;
     c.dispose();
   };

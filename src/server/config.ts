@@ -18,6 +18,8 @@ export interface Config {
   sessionIdleDays: number;
   llmModel: string;
   sttModel: string;
+  /** Model for question answering (XO_QA_MODEL). */
+  qaModel: string;
   classifyThreshold: number;
   /** Send `provider.zdr: true` on every OpenRouter request (XO_OPENROUTER_ZDR, default false). */
   openRouterZdr: boolean;
@@ -214,6 +216,7 @@ export function loadConfig(
     sessionIdleDays,
     llmModel: modelSlug(env, 'XO_LLM_MODEL', 'anthropic/claude-haiku-4.5'),
     sttModel: modelSlug(env, 'XO_STT_MODEL', 'openai/whisper-1'),
+    qaModel: modelSlug(env, 'XO_QA_MODEL', 'anthropic/claude-sonnet-5.5'),
     openRouterZdr: bool(env, 'XO_OPENROUTER_ZDR', false),
     classifyThreshold: num(env, 'XO_CLASSIFY_THRESHOLD', 0.8, 0, 1, false),
     llm,

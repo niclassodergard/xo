@@ -8,6 +8,7 @@ import { createAgendaItem, softDeleteAgendaItem, updateAgendaItem } from '../rep
 import { endMeeting, startMeeting, updateMeetingNotes } from '../repos/meetings.ts';
 import { createNote, softDeleteNote } from '../repos/notes.ts';
 import { createPerson, updatePerson } from '../repos/people.ts';
+import { createProject, linkPerson, softDeleteProject } from '../repos/projects.ts';
 import { defaultExportDir, exportAll, run, slugify } from './export.ts';
 
 const T = (n: number) => new Date(Date.UTC(2026, 0, 10 + n, 9, 30));
@@ -76,7 +77,7 @@ describe('exportAll', () => {
     const { db } = seed();
     const out = join(tmpDir(), 'out');
     const summary = exportAll(db, out);
-    expect(summary).toEqual({ people: 1, notes: 1, actions: 3 });
+    expect(summary).toEqual({ people: 1, notes: 1, actions: 3, projects: 0 });
     const files = walk(out);
     expect(files).toContain('actions.md');
     expect(files).toContain('people/åsa-berg.md');
@@ -348,6 +349,100 @@ describe('exportAll', () => {
     const f = join(tmpDir(), 'file');
     writeFileSync(f, 'x');
     expect(() => exportAll(db, f)).toThrow(/not a directory/);
+  });
+});
+
+describe('exportAll with projects', () => {
+  it('writes a project file and project labels on notes and actions', () => {
+    const { db, anna } = seed();
+    const p = createProject(db, { title: 'Apollo', aliases: ['Moon'], status: 'on_hold', descriptionMd: '# Big plan\nline' }, T(0));
+    linkPerson(db, p.id, anna.id, T(0));
+    createAction(db, { text: 'open task', owner: 'them', personId: anna.id, projectId: p.id }, T(3));
+    updateAction(db, createAction(db, { text: 'finished task', projectId: p.id }, T(3)).id, { status: 'done' }, T(4));
+    createNote(db, { title: 'Apollo kickoff', bodyMd: 'b', projectId: p.id }, T(3));
+    const out = join(tmpDir(), 'out');
+    expect(exportAll(db, out).projects).toBe(1);
+    expect(walk(out)).toContain('projects/apollo.md');
+    const f = read(out, 'projects/apollo.md');
+    expect(f).toContain('# Apollo');
+    expect(f).toContain('Status: on hold');
+    expect(f).toContain('Aliases: Moon');
+    expect(f).toContain('> # Big plan');
+    expect(f).not.toMatch(/^# Big plan/m);
+    expect(f).toContain('## People\n\n- Åsa Berg');
+    expect(f.slice(f.indexOf('## Open actions'), f.indexOf('## Done actions'))).toContain('open task');
+    expect(f.slice(f.indexOf('## Done actions'))).toContain('finished task');
+    expect(f).toMatch(/- \[Apollo kickoff\]\(\.\.\/notes\/2026-01-13-apollo-kickoff-\d+\.md\)/);
+    expect(read(out, walk(out).find((x) => x.includes('apollo-kickoff'))!)).toContain('Project: Apollo');
+    expect(read(out, 'actions.md')).toContain('(them) (Åsa Berg) (Project: Apollo) open task');
+    expect(read(out, 'people/åsa-berg.md')).toContain('(Project: Apollo) open task');
+  });
+
+  it('omits a soft-deleted project and shows no project on its former actions', () => {
+    const db = makeTestDb();
+    const p = createProject(db, { title: 'SECRET-PROJ', aliases: ['SECRET-ALIAS'], descriptionMd: 'SECRET-DESC' }, T(0));
+    createAction(db, { text: 'kept action', projectId: p.id }, T(1));
+    createNote(db, { title: 'kept note', bodyMd: 'x', projectId: p.id }, T(1));
+    const before = join(tmpDir(), 'before');
+    exportAll(db, before);
+    expect(walk(before).map((f) => read(before, f)).join('\n')).toContain('SECRET-PROJ');
+    softDeleteProject(db, p.id, T(2));
+    const out = join(tmpDir(), 'out');
+    expect(exportAll(db, out).projects).toBe(0);
+    expect(walk(out).filter((f) => f.startsWith('projects/'))).toEqual([]);
+    const all = walk(out).map((f) => read(out, f)).join('\n');
+    expect(all).not.toContain('SECRET');
+    expect(all).not.toContain('Project:');
+    expect(all).toContain('kept action');
+    expect(all).toContain('kept note');
+  });
+
+  it('keeps hostile project titles inside the output directory', () => {
+    const db = makeTestDb();
+    for (const title of ['../../etc', '.hidden', 'a/b\\c', '/abs/path', '..']) createProject(db, { title }, T(0));
+    const base = tmpDir();
+    const out = join(base, 'out');
+    exportAll(db, out);
+    const files = walk(out).filter((f) => f.startsWith('projects/'));
+    expect(files).toHaveLength(5);
+    for (const f of files) {
+      expect(f.split('/').every((seg) => seg !== '..' && !seg.startsWith('.'))).toBe(true);
+      expect(resolve(out, f).startsWith(resolve(out) + '/')).toBe(true);
+    }
+    expect(readdirSync(base)).toEqual(['out']);
+  });
+
+  it('gives distinct files to equal slugs and to a slug equal to another fallback', () => {
+    const db = makeTestDb();
+    const a = createProject(db, { title: 'Alpha' }, T(0));
+    const b = createProject(db, { title: 'alpha' }, T(0));
+    // Third project's plain slug equals b's fallback `alpha-<b.id>`.
+    const c = createProject(db, { title: `Alpha ${b.id}` }, T(0));
+    const d = createProject(db, { title: 'ALPHA' }, T(0));
+    const out = join(tmpDir(), 'out');
+    exportAll(db, out);
+    const files = walk(out).filter((f) => f.startsWith('projects/'));
+    expect(new Set(files).size).toBe(4);
+    expect(files).toContain('projects/alpha.md');
+    expect(files).toContain(`projects/alpha-${b.id}.md`);
+    expect(read(out, 'projects/alpha.md')).toContain('# Alpha\n');
+    expect(read(out, `projects/alpha-${b.id}.md`)).toContain('# alpha\n');
+    expect(a.id).toBeLessThan(b.id);
+    expect(c.id).toBeLessThan(d.id);
+    // c took the plain name that b's fallback would have used, if c sorted first; either way no file lost.
+    expect(files.map((f) => read(out, f).split('\n')[0]).sort()).toEqual(['# ALPHA', '# Alpha', '# Alpha ' + b.id, '# alpha'].sort());
+  });
+
+  it('creates the projects directory 0700 and its files 0600, also into an existing empty directory', () => {
+    const db = makeTestDb();
+    createProject(db, { title: 'P' }, T(0));
+    const out = join(tmpDir(), 'out');
+    exportAll(db, out);
+    expect(statSync(join(out, 'projects')).mode & 0o777).toBe(0o700);
+    expect(statSync(join(out, 'projects/p.md')).mode & 0o777).toBe(0o600);
+    const existing = tmpDir();
+    exportAll(db, existing);
+    expect(existsSync(join(existing, 'projects/p.md'))).toBe(true);
   });
 });
 

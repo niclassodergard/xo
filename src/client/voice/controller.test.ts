@@ -61,6 +61,16 @@ describe('voice controller', () => {
     expect(s.phase()).toBe('idle');
   });
 
+  it('runs an open-project command using the projects dependency', async () => {
+    const s = setup({
+      upload: vi.fn(async () => ({ text: 'open Board deck' })),
+      projects: () => [{ id: 7, title: 'Board deck', aliases: [] }],
+    });
+    s.c.press(); await tick(); s.advance(1000); s.c.release(); await tick();
+    expect(s.deps.runCommand).toHaveBeenCalledWith({ type: 'open_project', projectId: 7 });
+    expect(s.deps.dictate).not.toHaveBeenCalled();
+  });
+
   it('runs a matching voice command instead of dictating', async () => {
     const s = setup({ upload: vi.fn(async () => ({ text: 'Open Anna.' })) });
     s.c.press(); await tick(); s.advance(1000); s.c.release(); await tick();
@@ -108,8 +118,19 @@ describe('voice controller', () => {
     expect(s.phase()).toBe('idle');
   });
 
-  it('stops and uploads at the maximum length only while the key is held', async () => {
-    const s = setup();
+  it('at the maximum length a key-held recording without proof of the hold goes to the prompt, nothing is sent', async () => {
+    for (const heldAlive of [undefined, () => false]) {
+      const s = setup(heldAlive ? { heldAlive } : {});
+      s.c.press({ held: true }); await tick(); s.advance(120_000);
+      s.fireMax(); await tick();
+      expect(s.phase()).toBe('confirming');
+      expect(s.deps.upload).not.toHaveBeenCalled();
+      s.c.cancel();
+    }
+  });
+
+  it('stops and uploads at the maximum length only while the key is provably held', async () => {
+    const s = setup({ heldAlive: () => true });
     s.c.press({ held: true }); await tick(); s.advance(120_000);
     s.fireMax(); await tick();
     expect(s.deps.upload).toHaveBeenCalledTimes(1);

@@ -1,0 +1,85 @@
+/* Shared component kit: buttons, chips, inputs, lists, dialogs. Tokens only. */
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--s2); min-height: 36px;
+  padding: 0 var(--s4); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--bg-raised); color: var(--fg);
+}
+.btn:hover:not(:disabled) { background: var(--bg-hover); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+.btn.primary:hover:not(:disabled) { background: var(--accent); filter: brightness(1.06); }
+.btn.danger { color: var(--danger); }
+.icon-btn {
+  display: inline-grid; place-items: center; width: 36px; height: 36px; border: 0; border-radius: var(--radius-sm);
+  background: transparent; color: var(--fg-muted); font-size: 1.1em;
+}
+.icon-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--fg); }
+
+.chip {
+  display: inline-flex; align-items: center; min-height: 28px; padding: 0 var(--s3);
+  border: 1px solid var(--border); border-radius: 999px; background: var(--bg); color: var(--fg);
+  font-size: 0.875em; white-space: nowrap;
+}
+.chip:hover { background: var(--bg-hover); }
+.chip.highlighted { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.chip.danger { color: var(--danger); }
+
+.input, .textedit {
+  width: 100%; min-height: 40px; padding: var(--s2) var(--s3); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); background: var(--bg); color: var(--fg);
+}
+textarea.textedit { resize: vertical; line-height: var(--leading); }
+.input:focus, .textedit:focus { border-color: var(--accent); outline: 2px solid var(--accent); outline-offset: -1px; }
+.hint { color: var(--fg-muted); font-size: 0.875em; }
+.empty { color: var(--fg-muted); padding: var(--s3); }
+.error-text { color: var(--danger); }
+
+/* ---- List ---- */
+.list-wrap { display: flex; flex-direction: column; gap: var(--s2); }
+.list { display: flex; flex-direction: column; border-radius: var(--radius); }
+.list:focus { outline: none; }
+.list:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.row {
+  display: flex; align-items: center; gap: var(--s3); min-height: 44px; padding: var(--s2) var(--s3);
+  border-radius: var(--radius-sm); cursor: pointer;
+}
+.row:hover { background: var(--bg-hover); }
+.row.selected { background: var(--bg-selected); }
+.row-body { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.row-chips { display: flex; flex-wrap: wrap; gap: var(--s1); opacity: 0; }
+.row.selected .row-chips, .row:hover .row-chips, .row:focus-within .row-chips { opacity: 1; }
+@media (hover: none) { .row-chips { opacity: 1; } }
+.list-add { display: flex; gap: var(--s2); }
+
+/* ---- Overlay / dialogs ---- */
+.overlay {
+  position: fixed; inset: 0; z-index: 50; display: flex; align-items: flex-start; justify-content: center;
+  padding: 12vh var(--s4) var(--s4); background: var(--scrim);
+}
+.dialog {
+  width: min(100%, 520px); max-height: 76vh; overflow: auto; background: var(--bg-raised);
+  border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: var(--s4);
+  display: flex; flex-direction: column; gap: var(--s3);
+}
+.dialog.wide { width: min(100%, 680px); }
+.dialog:focus { outline: none; }
+.dialog h2 { font-size: 1.05em; }
+.dialog-actions { display: flex; gap: var(--s2); justify-content: flex-end; }
+.results { display: flex; flex-direction: column; max-height: 50vh; overflow-y: auto; }
+.results .group-title { color: var(--fg-muted); font-size: 0.8em; text-transform: uppercase; letter-spacing: 0.06em; padding: var(--s2) var(--s3) 0; }
+.help-section { display: flex; flex-direction: column; gap: var(--s2); }
+.help-section h3 { font-size: 0.85em; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.help-row { display: flex; gap: var(--s3); align-items: baseline; }
+.help-row kbd { flex: 0 0 11em; }
+
+@media (max-width: 899.98px) {
+  .overlay { padding-top: calc(var(--s4) + env(safe-area-inset-top)); }
+  .dialog { max-height: 80dvh; }
+}
+
+/* Touch targets: at least 44 px in single-panel mode (phone, narrow windows); the desktop stays compact. */
+@media (max-width: 899.98px) {
+  .icon-btn { width: 44px; height: 44px; }
+  .chip, .btn { min-height: 44px; }
+  .input, .textedit { min-height: 44px; }
+}

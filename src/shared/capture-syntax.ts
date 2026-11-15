@@ -1,8 +1,8 @@
 import type { ItemKind, Owner } from './types.ts';
 
-export interface ParsedCapture { forcedKind: ItemKind | null; forcedOwner: Owner | null; mentions: string[]; text: string }
+export interface ParsedCapture { forcedKind: ItemKind | 'question' | null; forcedOwner: Owner | null; mentions: string[]; projectMentions: string[]; text: string }
 
-const PREFIXES: Record<string, { kind: ItemKind; owner: Owner | null }> = {
+const PREFIXES: Record<string, { kind: ItemKind | 'question'; owner: Owner | null }> = {
   note: { kind: 'note', owner: null },
   n: { kind: 'note', owner: null },
   todo: { kind: 'action', owner: 'me' },
@@ -12,6 +12,8 @@ const PREFIXES: Record<string, { kind: ItemKind; owner: Owner | null }> = {
   w: { kind: 'action', owner: 'them' },
   agenda: { kind: 'agenda', owner: null },
   a: { kind: 'agenda', owner: null },
+  ask: { kind: 'question', owner: null },
+  q: { kind: 'question', owner: null },
 };
 
 // A command is only recognised at the very start, as a whole word.
@@ -21,6 +23,10 @@ const PREFIX_RE = /^\/(\p{L}+)(?=\s|$)/u;
 // preceding letter/digit (e-mail addresses). All repetitions are bounded to keep matching linear.
 const MENTION_RE = /(^|[^\p{L}\p{N}])@(?:["\u201c\u201d\u201e]([^"\u201c\u201d\u201e\n]{0,200})["\u201c\u201d]|([\p{L}\p{N}_][\p{L}\p{N}\p{M}_-]{0,199}(?:['\u2019][\p{L}\p{N}\p{M}_-]{1,100}){0,5}))/gu;
 
+// `#name` or `#"Full title"`: the `#` must not follow a letter or digit and the first character after it
+// must be a letter (so `#1`, `issue #42`, `a#b` and `# heading` are plain text). Bounded like MENTION_RE.
+const PROJECT_RE = /(^|[^\p{L}\p{N}])#(?:["\u201c\u201d\u201e]([^"\u201c\u201d\u201e\n]{0,200})["\u201c\u201d]|(\p{L}[\p{L}\p{N}\p{M}_-]{0,199}))/gu;
+
 function cleanName(name: string): string {
   return name.replace(/\s+/g, ' ').trim();
 }
@@ -28,7 +34,7 @@ function cleanName(name: string): string {
 /** Parse the prefix command and `@mentions` of a raw chat capture. Pure; never throws. */
 export function parseCapture(raw: string): ParsedCapture {
   let text = raw.normalize('NFC').trim();
-  let forcedKind: ItemKind | null = null;
+  let forcedKind: ItemKind | 'question' | null = null;
   let forcedOwner: Owner | null = null;
 
   const m = PREFIX_RE.exec(text);
@@ -64,5 +70,22 @@ export function parseCapture(raw: string): ParsedCapture {
     return lead + name + tail;
   });
 
-  return { forcedKind, forcedOwner, mentions, text: text.trim() };
+  const projectMentions: string[] = [];
+  text = text.replace(PROJECT_RE, (whole, lead: string, quoted?: string, bare?: string) => {
+    let name: string;
+    let tail = '';
+    if (bare !== undefined) {
+      let end = bare.length;
+      while (end > 0 && (bare[end - 1] === '-' || bare[end - 1] === '_')) end--;
+      name = bare.slice(0, end);
+      tail = bare.slice(end);
+    } else {
+      name = cleanName(quoted ?? '');
+    }
+    if (name === '') return whole;
+    projectMentions.push(name);
+    return lead + name + tail;
+  });
+
+  return { forcedKind, forcedOwner, mentions, projectMentions, text: text.trim() };
 }

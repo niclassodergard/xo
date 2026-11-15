@@ -3,12 +3,13 @@ import { fstatSync, closeSync, lstatSync, mkdirSync, openSync, readdirSync, rena
 import { dirname, join, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { Config } from '../config.ts';
-import type { Action, AgendaItem, Id, Meeting, Note, Person } from '../../shared/types.ts';
+import type { Action, AgendaItem, Id, Meeting, Note, Person, Project } from '../../shared/types.ts';
 import { listActions } from '../repos/actions.ts';
 import { mapAgendaItem } from '../repos/agenda.ts';
 import { getMeetingDetail } from '../repos/meetings.ts';
 import { listNotes } from '../repos/notes.ts';
 import { getPersonDetail, listPeople } from '../repos/people.ts';
+import { listProjectPeople, listProjects, getProject } from '../repos/projects.ts';
 
 const USAGE = 'Usage: pnpm xo export [--out <dir>]';
 // Filenames stay far below the 255-byte limit: date (10) + slug + id (<= 16) + extras.
@@ -82,10 +83,11 @@ function agendaLine(a: AgendaItem): string {
   return `- [${box}] ${oneLine(a.text)}${a.status === 'dropped' ? ' (dropped)' : ''}`;
 }
 
-function actionLine(a: Action, names: Map<Id, string>, withPerson: boolean): string {
+function actionLine(a: Action, names: Map<Id, string>, withPerson: boolean, projects: Map<Id, string> | null = null): string {
+  const project = projects !== null && a.projectId !== null && projects.has(a.projectId) ? ` (Project: ${oneLine(projects.get(a.projectId) as string)})` : '';
   const person = withPerson && a.personId !== null && names.has(a.personId) ? ` (${oneLine(names.get(a.personId) as string)})` : '';
   const done = a.status === 'done' && a.doneAt ? ` (done ${day(a.doneAt)})` : '';
-  return `- [${a.status === 'done' ? 'x' : ' '}] (${a.owner})${person} ${oneLine(a.text)}${done}`;
+  return `- [${a.status === 'done' ? 'x' : ' '}] (${a.owner})${person}${project} ${oneLine(a.text)}${done}`;
 }
 
 function noteFileName(n: Note): string {
@@ -102,18 +104,18 @@ function resolvedOutside(db: DatabaseSync, personId: Id): AgendaItem[] {
   return rows.map(mapAgendaItem);
 }
 
-function meetingSection(db: DatabaseSync, m: Meeting): string {
+function meetingSection(db: DatabaseSync, m: Meeting, projects: Map<Id, string>): string {
   const detail = getMeetingDetail(db, m.id);
   let s = `### ${minute(m.startedAt)}${m.endedAt === null ? ' (in progress)' : ''}\n\n`;
   s += quoteBody(m.notesMd);
   const resolved = detail?.resolvedHere ?? [];
   if (resolved.length > 0) s += `Agenda resolved:\n\n${resolved.map(agendaLine).join('\n')}\n\n`;
   const follow = detail?.actionsHere ?? [];
-  if (follow.length > 0) s += `Follow-ups:\n\n${follow.map((a) => actionLine(a, new Map(), false)).join('\n')}\n\n`;
+  if (follow.length > 0) s += `Follow-ups:\n\n${follow.map((a) => actionLine(a, new Map(), false, projects)).join('\n')}\n\n`;
   return s;
 }
 
-function personFile(db: DatabaseSync, p: Person): string {
+function personFile(db: DatabaseSync, p: Person, projects: Map<Id, string>): string {
   const d = getPersonDetail(db, p.id);
   if (!d) return `# ${oneLine(p.name)}\n`;
   let s = `# ${oneLine(p.name)}\n\n`;
@@ -121,23 +123,41 @@ function personFile(db: DatabaseSync, p: Person): string {
   if (p.archivedAt) s += `Archived: ${day(p.archivedAt)}\n\n`;
   if (p.notesMd.trim() !== '') s += `## Notes about ${oneLine(p.name)}\n\n${quoteBody(p.notesMd)}`;
   s += `## Open agenda\n\n${d.openAgenda.length ? d.openAgenda.map(agendaLine).join('\n') : '(none)'}\n\n`;
-  s += `## Open actions\n\n${d.openActions.length ? d.openActions.map((a) => actionLine(a, new Map(), false)).join('\n') : '(none)'}\n\n`;
+  s += `## Open actions\n\n${d.openActions.length ? d.openActions.map((a) => actionLine(a, new Map(), false, projects)).join('\n') : '(none)'}\n\n`;
   const outside = resolvedOutside(db, p.id);
   if (outside.length > 0) s += `## Resolved outside meetings\n\n${outside.map(agendaLine).join('\n')}\n\n`;
   if (d.notes.length > 0) {
     s += `## Linked notes\n\n${d.notes.map((n) => `- [${oneLine(n.title)}](../notes/${noteFileName(n)})`).join('\n')}\n\n`;
   }
   s += `## Meetings\n\n`;
-  s += d.meetings.length ? d.meetings.map((m) => meetingSection(db, m)).join('') : '(none)\n';
+  s += d.meetings.length ? d.meetings.map((m) => meetingSection(db, m, projects)).join('') : '(none)\n';
   return s.trimEnd() + '\n';
 }
 
-function noteFile(n: Note, names: Map<Id, string>): string {
+function noteFile(n: Note, names: Map<Id, string>, projects: Map<Id, string>): string {
   let s = `# ${oneLine(n.title)}\n\n`;
   s += `Created: ${minute(n.createdAt)}`;
   if (n.updatedAt !== n.createdAt) s += ` · Updated: ${minute(n.updatedAt)}`;
   if (n.personId !== null && names.has(n.personId)) s += ` · Person: ${oneLine(names.get(n.personId) as string)}`;
+  if (n.projectId !== null && projects.has(n.projectId)) s += ` · Project: ${oneLine(projects.get(n.projectId) as string)}`;
   return `${s}\n\n${quoteBody(n.bodyMd)}`.trimEnd() + '\n';
+}
+
+const STATUS_LABEL: Record<Project['status'], string> = { active: 'active', on_hold: 'on hold', done: 'done' };
+
+function projectFile(db: DatabaseSync, p: Project, names: Map<Id, string>): string {
+  let s = `# ${oneLine(p.title)}\n\nStatus: ${STATUS_LABEL[p.status]}\n\n`;
+  if (p.aliases.length > 0) s += `Aliases: ${p.aliases.map(oneLine).join(', ')}\n\n`;
+  if (p.descriptionMd.trim() !== '') s += `## Description\n\n${quoteBody(p.descriptionMd)}`;
+  const people = listProjectPeople(db, p.id);
+  s += `## People\n\n${people.length ? people.map((x) => `- ${oneLine(x.name)}`).join('\n') : '(none)'}\n\n`;
+  const open = listActions(db, { status: 'open', projectId: p.id });
+  const done = listActions(db, { status: 'done', projectId: p.id });
+  const list = (l: Action[]): string => (l.length ? l.map((a) => actionLine(a, names, true)).join('\n') : '(none)');
+  s += `## Open actions\n\n${list(open)}\n\n## Done actions\n\n${list(done)}\n\n`;
+  const notes = listNotes(db, { projectId: p.id });
+  s += `## Notes\n\n${notes.length ? notes.map((n) => `- [${oneLine(n.title)}](../notes/${noteFileName(n)})`).join('\n') : '(none)'}\n`;
+  return s;
 }
 
 /** First free name: `<slug>.md`, then `<slug>-<id>.md`, then `<slug>-<id>-2.md`, ... */
@@ -156,24 +176,32 @@ function buildFiles(db: DatabaseSync): { files: ExportFile[]; summary: ExportSum
   try {
     const people = listPeople(db, { includeArchived: true });
     const names = new Map<Id, string>(people.map((p) => [p.id, p.name]));
+    // Live projects only: deleting a project clears project_id on its actions and notes.
+    const projects = listProjects(db, { status: 'all' });
+    const projectNames = new Map<Id, string>(projects.map((p) => [p.id, p.title]));
     const files: ExportFile[] = [];
 
     const used = new Set<string>();
     // Lowest id keeps the plain slug, so file names are stable across exports.
     for (const p of [...people].sort((x, y) => x.id - y.id)) {
-      files.push({ rel: `people/${uniqueName(slugify(p.name), p.id, used)}`, content: personFile(db, p) });
+      files.push({ rel: `people/${uniqueName(slugify(p.name), p.id, used)}`, content: personFile(db, p, projectNames) });
     }
     const notes = listNotes(db);
     for (const n of notes) {
       // The id is the last token of the name, so note file names are unique by construction.
-      files.push({ rel: `notes/${noteFileName(n)}`, content: noteFile(n, names) });
+      files.push({ rel: `notes/${noteFileName(n)}`, content: noteFile(n, names, projectNames) });
+    }
+    const usedProjects = new Set<string>();
+    for (const sum of [...projects].sort((x, y) => x.id - y.id)) {
+      const p = getProject(db, sum.id);
+      if (p) files.push({ rel: `projects/${uniqueName(slugify(p.title), p.id, usedProjects)}`, content: projectFile(db, p, names) });
     }
     const open = listActions(db, { status: 'open' });
     const done = listActions(db, { status: 'done' });
     const section = (title: string, list: Action[]): string =>
-      `## ${title}\n\n${list.length ? list.map((a) => actionLine(a, names, true)).join('\n') : '(none)'}\n`;
+      `## ${title}\n\n${list.length ? list.map((a) => actionLine(a, names, true, projectNames)).join('\n') : '(none)'}\n`;
     files.push({ rel: 'actions.md', content: `# Actions\n\n${section('Open', open)}\n${section('Done', done)}` });
-    return { files, summary: { people: people.length, notes: notes.length, actions: open.length + done.length } };
+    return { files, summary: { people: people.length, notes: notes.length, actions: open.length + done.length, projects: projects.length } };
   } finally {
     db.exec('ROLLBACK'); // read-only: just ends the snapshot
   }
@@ -227,7 +255,7 @@ function sanitizeFsError(err: unknown): Error {
   return err instanceof Error ? err : new Error('export failed');
 }
 
-export interface ExportSummary { people: number; notes: number; actions: number }
+export interface ExportSummary { people: number; notes: number; actions: number; projects: number }
 
 /**
  * Exports into `outDir`, which must not exist or be an empty directory you own. Everything is read in
@@ -262,16 +290,18 @@ export function exportAll(db: DatabaseSync, outDir: string): ExportSummary {
     requireOwnDir(tmp, 'temporary directory', true);
     mkdirSync(join(tmp, 'people'), { mode: 0o700 });
     mkdirSync(join(tmp, 'notes'), { mode: 0o700 });
+    mkdirSync(join(tmp, 'projects'), { mode: 0o700 });
     requireOwnDir(join(tmp, 'people'), 'people directory', true);
     requireOwnDir(join(tmp, 'notes'), 'notes directory', true);
+    requireOwnDir(join(tmp, 'projects'), 'projects directory', true);
     for (const f of files) writeNew(join(tmp, f.rel), f.content);
 
     if (state === 'absent') {
       renameSync(tmp, target);
       tmpMade = false;
     } else {
-      // Existing empty directory: keep it (and its mode) and move the three entries in.
-      for (const name of ['people', 'notes', 'actions.md']) {
+      // Existing empty directory: keep it (and its mode) and move the entries in.
+      for (const name of ['people', 'notes', 'projects', 'actions.md']) {
         renameSync(join(tmp, name), join(target, name));
         moved.push(name);
       }
@@ -296,7 +326,7 @@ export async function run(args: string[], ctx: { config: Config; db: DatabaseSyn
   const target = out ?? defaultExportDir(new Date());
   const summary = exportAll(ctx.db, target);
   console.log(
-    `Exported ${summary.people} people, ${summary.notes} notes and ${summary.actions} actions to ${resolve(target)} (times are UTC). ` +
+    `Exported ${summary.people} people, ${summary.projects} projects, ${summary.notes} notes and ${summary.actions} actions to ${resolve(target)} (times are UTC). ` +
       'Captures still waiting for classification are not exported. ' +
       'The export is plaintext: keep it private and delete it when no longer needed.',
   );

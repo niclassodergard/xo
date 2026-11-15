@@ -67,6 +67,11 @@ describe('decideTranscript', () => {
     expect(decideTranscript('start 1-1 with Anna', people)).toEqual({ kind: 'command', command: { type: 'start_meeting', personId: 1 } });
     expect(decideTranscript('go to actions', people)).toEqual({ kind: 'command', command: { type: 'goto', view: 'actions' } });
   });
+  it('opens a project, and a project name is dictation without the project list', () => {
+    const projects = [{ id: 7, title: 'Board deck', aliases: [] }];
+    expect(decideTranscript('open Board deck', people, projects)).toEqual({ kind: 'command', command: { type: 'open_project', projectId: 7 } });
+    expect(decideTranscript('open Board deck', people)).toEqual({ kind: 'dictation', text: 'open Board deck' });
+  });
   it('turns everything else into dictation, trimmed (unknown person included)', () => {
     expect(decideTranscript('  buy milk tomorrow ', people)).toEqual({ kind: 'dictation', text: 'buy milk tomorrow' });
     expect(decideTranscript('open Zelda', people)).toEqual({ kind: 'dictation', text: 'open Zelda' });

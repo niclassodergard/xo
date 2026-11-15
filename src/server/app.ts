@@ -13,15 +13,17 @@ import agendaRoutes from './routes/agenda.ts';
 import authRoutes from './routes/auth.ts';
 import capturesRoutes from './routes/captures.ts';
 import meetingsRoutes from './routes/meetings.ts';
+import navRoutes from './routes/nav.ts';
 import notesRoutes from './routes/notes.ts';
 import peopleRoutes from './routes/people.ts';
+import projectsRoutes from './routes/projects.ts';
 import searchRoutes from './routes/search.ts';
 import voiceRoutes from './routes/voice.ts';
 
 const GUARDED_SCOPE = 'xoGuardedApiScope';
 const PERMISSIONS_POLICY = 'camera=(), geolocation=(), payment=(), usb=(), display-capture=(), microphone=(self)';
 
-const CLIENT_DIR = fileURLToPath(new URL('../../dist/client/', import.meta.url));
+const DEFAULT_CLIENT_DIR = fileURLToPath(new URL('../../dist/client/', import.meta.url));
 
 function trustProxyOption(tp: AppDeps['config']['trustProxy']): boolean | string[] | ((address: string, hop: number) => boolean) {
   // A hop count n means: trust the n nearest proxies (same semantics as proxy-addr's number form).
@@ -74,7 +76,7 @@ export function mustBeGuarded(url: string): boolean {
  */
 export async function buildApp(
   deps: AppDeps,
-  opts: { logger?: boolean; onRoute?: (route: RouteOptions) => void } = {},
+  opts: { logger?: boolean; onRoute?: (route: RouteOptions) => void; clientDir?: string } = {},
 ): Promise<FastifyInstance> {
   const app = Fastify(serverOptions(deps, opts.logger ?? false));
   const { config } = deps;
@@ -135,6 +137,8 @@ export async function buildApp(
       const opts = { deps };
       await api.register(authRoutes, opts);
       await api.register(peopleRoutes, opts);
+      await api.register(projectsRoutes, opts);
+      await api.register(navRoutes, opts);
       await api.register(notesRoutes, opts);
       await api.register(actionsRoutes, opts);
       await api.register(agendaRoutes, opts);
@@ -148,10 +152,12 @@ export async function buildApp(
 
   // Unmatched requests never reach the scope's hooks, so guard them here: any API-looking path
   // (decoded, fail closed) is 401 unless authenticated, then 404.
-  const serveSpa = existsSync(CLIENT_DIR);
+  // `clientDir` is a code-level option (tests, e2e) and never read from the environment.
+  const clientDir = opts.clientDir ?? DEFAULT_CLIENT_DIR;
+  const serveSpa = existsSync(clientDir);
   if (serveSpa) {
     // wildcard:false registers the files present at startup only (no directory traversal surface).
-    await app.register(fastifyStatic, { root: CLIENT_DIR, wildcard: false });
+    await app.register(fastifyStatic, { root: clientDir, wildcard: false });
   }
   app.setNotFoundHandler(async (req, reply) => {
     if (isApiRequest(req)) {

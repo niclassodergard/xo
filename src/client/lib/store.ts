@@ -1,10 +1,11 @@
+import { clearPendingFocus } from './focus.ts';
 import { computed, effect, signal } from '@preact/signals';
 import type { Signal } from '@preact/signals';
 import { useLayoutEffect } from 'preact/hooks';
-import type { Capture, Person } from '../../shared/types.ts';
-import type { CapturesListResponse, PeopleListResponse, SessionResponse } from '../../shared/api.ts';
+import type { Id, Person } from '../../shared/types.ts';
+import type { NavResponse, PeopleListResponse, ProjectsListResponse, ProjectSummary, SessionResponse } from '../../shared/api.ts';
 import { api, ApiError } from './api.ts';
-import { mode } from './keys.ts';
+import { modalOpen } from './keys.ts';
 import { navigate } from './router.ts';
 
 /*
@@ -16,18 +17,16 @@ import { navigate } from './router.ts';
  *    after the session ended:
  *        const e = epoch(); const r = await api.get(...); if (e !== epoch()) return;
  * 2. A 401 does NOT unmount the shell. `session` becomes null, a Login overlay covers the hidden, inert
- *    shell, and the VIEW subtree is unmounted (appPhase() === 'locked'), so no server-loaded content
- *    stays in the DOM behind the curtain. What survives is only what the user typed, held in signals:
- *    chatDraft, searchQuery and `drafts` (unsaved TextEdit text, keyed by the editor's stable `id`).
- *    Give every TextEdit that edits server data a stable `id`. After re-login the views remount,
+ *    shell, and the stream and the panel are unmounted (appPhase() === 'locked'), so no server-loaded
+ *    content stays in the DOM behind the curtain; `people`, `projects` and `nav` are cleared. What
+ *    survives is only what the user typed, held in signals: chatDraft, searchQuery and `drafts` (unsaved
+ *    TextEdit text, keyed by the editor's stable `id`), plus the module-level send queue.
+ *    Give every TextEdit that edits server data a stable `id`. After re-login the documents remount,
  *    reload, and TextEdit re-applies and retries its pending draft. Component state is NOT preserved,
  *    so anything the user typed must live in one of those signals. Only an explicit logout() wipes drafts.
  * 3. Overlays register a 'modal' key layer (see lib/keys.ts) so keys never reach views behind them.
  *    Focus an overlay's input synchronously (useLayoutEffect / ref callback), never in useEffect.
- * 4. To focus the chat or search input from outside, call requestFocus('chat'|'search'); the view
- *    calls useFocusRequest('chat', () => inputEl). The hook re-checks after every render of the view
- *    until the input exists or the request expires (1 s), but chat and search inputs should render
- *    from the first render rather than appear conditionally.
+ * 4. To focus the composer or the panel from outside, call focusTarget('composer' | 'panel') (lib/focus.ts).
  * 5. A save (TextEdit onSave, or any write) must return its promise; "saved" means resolved. A failed
  *    save leaves the draft dirty and it is retried on the next blur/unmount/re-login.
  */
@@ -39,6 +38,27 @@ export const booted: Signal<boolean> = signal(false);
 /** True once the user has been logged in; stays true across a 401 (Login overlay), false after logout(). */
 export const shellActive: Signal<boolean> = signal(false);
 export const people: Signal<Person[]> = signal<Person[]>([]);
+/** Project list for pickers, labels and the palette. Cleared when the session ends. */
+export const projects: Signal<ProjectSummary[]> = signal<ProjectSummary[]>([]);
+/** Pinned and recent items for the sidebar. Cleared when the session ends. */
+export const nav: Signal<NavResponse> = signal<NavResponse>({ pinned: [], recents: [] });
+/** Title shown in the panel header; documents set it with usePanelTitle(). */
+export const panelTitle: Signal<string> = signal('');
+/** Name of a person by id from the loaded list; null when unknown (never throws). */
+export function personName(id: Id | null): string | null {
+  return id === null ? null : people.value.find((p) => p.id === id)?.name ?? null;
+}
+/** Title of a project by id from the loaded list; null when unknown. */
+export function projectTitle(id: Id | null): string | null {
+  return id === null ? null : projects.value.find((p) => p.id === id)?.title ?? null;
+}
+/** Set the panel header title while the calling document is mounted. */
+export function usePanelTitle(title: string): void {
+  useLayoutEffect(() => {
+    panelTitle.value = title;
+    return () => { if (panelTitle.peek() === title) panelTitle.value = ''; };
+  }, [title]);
+}
 /** Chat input text (voice dictation writes here). */
 export const chatDraft: Signal<string> = signal('');
 /**
@@ -160,17 +180,21 @@ export function errorText(e: unknown): string {
 // ---- overlays -----------------------------------------------------------------------------
 
 export const overlay: Signal<'palette' | 'help' | null> = signal<'palette' | 'help' | null>(null);
-export interface PickerRequest { onPick: (p: Person) => void }
+export interface PickRequest { kind: 'person' | 'project'; onPick: (id: Id) => void }
 export interface PromptRequest { label: string; onSubmit: (value: string) => void }
-export const personPicker: Signal<PickerRequest | null> = signal<PickerRequest | null>(null);
+export interface ConfirmRequest { message: string; onYes: () => void }
+/** Store-driven overlays, rendered once by app.tsx. Components may also render <ItemPicker /> themselves. */
+export const pickRequest: Signal<PickRequest | null> = signal<PickRequest | null>(null);
 export const promptRequest: Signal<PromptRequest | null> = signal<PromptRequest | null>(null);
+export const confirmRequest: Signal<ConfirmRequest | null> = signal<ConfirmRequest | null>(null);
 
 // ---- session / data -----------------------------------------------------------------------
 
 function closeAllOverlays(): void {
   overlay.value = null;
-  personPicker.value = null;
+  pickRequest.value = null;
   promptRequest.value = null;
+  confirmRequest.value = null;
 }
 
 effect(() => { if (session.value) shellActive.value = true; });
@@ -180,16 +204,15 @@ effect(() => { if (chatDraft.value === '') chatVoiceChars.value = 0; });
 // Drafts are kept here on purpose (see convention 2); logout() wipes them.
 effect(() => {
   if (session.value === null) {
+    clearPendingFocus(); // a queued composer/panel focus must not fire behind the lock
     sessionEpoch++;
     people.value = [];
+    projects.value = [];
+    nav.value = { pinned: [], recents: [] };
+    panelTitle.value = '';
     clearFlash();
     closeAllOverlays();
   }
-});
-
-// Command mode only exists while the palette is open (e.g. a 401 with the palette open).
-effect(() => {
-  if (overlay.value !== 'palette' && mode.peek() === 'command') mode.value = 'normal';
 });
 
 export async function restoreSession(): Promise<void> {
@@ -242,6 +265,34 @@ export function initAuthChannel(): () => void {
   return () => { ch.close(); if (channel === ch) channel = null; };
 }
 
+export async function refreshProjects(): Promise<void> {
+  const e = epoch();
+  try {
+    const r = await api.get<ProjectsListResponse>('/api/projects');
+    if (e !== epoch()) return;
+    projects.value = r.projects;
+  } catch (err) {
+    if (e === epoch()) flash(`Could not load projects: ${errorText(err)}`, 'error');
+  }
+}
+
+let navSeq = 0;
+/** Write `nav` locally (optimistic change or its rollback); any GET already in flight is now stale and dropped. */
+export function setNavOptimistic(next: NavResponse): void {
+  navSeq++;
+  nav.value = next;
+}
+/** Silent on failure: the sidebar lists just stay as they are. Only the newest request's response is applied. */
+export async function refreshNav(): Promise<void> {
+  const e = epoch();
+  const seq = ++navSeq;
+  try {
+    const r = await api.get<NavResponse>('/api/nav');
+    if (e !== epoch() || seq !== navSeq) return;
+    nav.value = r;
+  } catch { /* keep what we have */ }
+}
+
 /** Wipe everything that belongs to the session, drafts included. */
 function endLocally(): void {
   session.value = null;
@@ -250,7 +301,7 @@ function endLocally(): void {
   chatStash.value = null;
   searchQuery.value = '';
   drafts.value = {};
-  navigate('/chat', { replace: true });
+  navigate('/', { replace: true });
 }
 
 /**
@@ -273,32 +324,20 @@ export async function logout(): Promise<boolean> {
   return true;
 }
 
-/** `u`: undo the most recent filed capture. */
-export async function undoLastCapture(): Promise<void> {
-  const e = epoch();
-  try {
-    const r = await api.get<CapturesListResponse>('/api/captures?limit=50');
-    if (e !== epoch()) return;
-    const last = [...r.captures].reverse().find((c) => c.status === 'filed');
-    if (!last) { flash('Nothing to undo'); return; }
-    const c = await api.post<Capture>(`/api/captures/${last.id}/undo`);
-    if (e === epoch()) flash(`Undone: ${c.summary}`);
-  } catch (err) {
-    if (e === epoch()) flash(errorText(err), 'error');
-  }
-}
-
 // ---- overlay controls ---------------------------------------------------------------------
 
 /**
- * Ctrl-K / ':' do nothing while a Prompt or person picker is open. Closing them first would throw away
- * what the user is typing, and stacking the palette behind them would send keystrokes to an invisible
- * input; a no-op is the simplest option that is always safe.
+ * Cmd-K does nothing while any other overlay owns the keyboard (a Prompt, a picker, a confirm, the
+ * drawer, a recording). Closing them first would throw away what the user is typing, and stacking the
+ * palette behind them would send keystrokes to an invisible input; a no-op is always safe.
  */
+function otherOverlayOpen(): boolean {
+  return modalOpen() || pickRequest.peek() !== null || promptRequest.peek() !== null || confirmRequest.peek() !== null;
+}
+
 export function openPalette(): void {
-  if (overlay.value === 'palette' || personPicker.value || promptRequest.value) return;
+  if (overlay.value === 'palette' || otherOverlayOpen()) return;
   overlay.value = 'palette';
-  mode.value = 'command';
 }
 
 export function togglePalette(): void {
@@ -307,50 +346,24 @@ export function togglePalette(): void {
 }
 
 export function toggleHelp(): void {
-  overlay.value = overlay.value === 'help' ? null : 'help';
+  if (overlay.value === 'help') closeOverlay();
+  else if (!otherOverlayOpen()) overlay.value = 'help';
 }
 
 export function closeOverlay(): void {
-  const wasPalette = overlay.value === 'palette';
-  overlay.value = null;
-  if (wasPalette) mode.value = 'normal'; // focus goes back to where it was in components/Overlay.tsx
+  overlay.value = null; // focus goes back to where it was in components/Overlay.tsx
 }
 
-export function pickPerson(onPick: (p: Person) => void): void {
-  personPicker.value = { onPick };
+/** Open the item picker (person or project). The picker closes itself before calling onPick. */
+export function askPick(kind: 'person' | 'project', onPick: (id: Id) => void): void {
+  pickRequest.value = { kind, onPick };
 }
 
 export function askText(label: string, onSubmit: (value: string) => void): void {
   promptRequest.value = { label, onSubmit };
 }
 
-// ---- focus requests -----------------------------------------------------------------------
-
-export type FocusTarget = 'chat' | 'search';
-export const focusRequest: Signal<{ target: FocusTarget; seq: number; at: number } | null> =
-  signal<{ target: FocusTarget; seq: number; at: number } | null>(null);
-let focusSeq = 0;
-const FOCUS_REQUEST_TTL_MS = 1000;
-
-export function requestFocus(target: FocusTarget): void {
-  focusRequest.value = { target, seq: ++focusSeq, at: Date.now() };
-}
-export const focusChatInput = (): void => requestFocus('chat');
-export const focusSearchInput = (): void => requestFocus('search');
-
-/**
- * Views call this with their input getter. The request is consumed synchronously in a layout effect,
- * on mount (the view was just navigated to) or when a new request arrives (view already open).
- * Stale requests (older than 1 s, e.g. for a view that never consumed them) are ignored.
- */
-export function useFocusRequest(target: FocusTarget, getEl: () => HTMLElement | null): void {
-  void focusRequest.value; // subscribes the component to new requests
-  // No dependency list: re-checked after every render until consumed or expired.
-  useLayoutEffect(() => {
-    const r = focusRequest.peek();
-    if (!r || r.target !== target) return;
-    if (Date.now() - r.at > FOCUS_REQUEST_TTL_MS) { focusRequest.value = null; return; }
-    const el = getEl();
-    if (el) { el.focus(); focusRequest.value = null; }
-  });
+/** Ask a yes/no question; `onYes` runs only on an explicit yes. */
+export function askConfirm(message: string, onYes: () => void): void {
+  confirmRequest.value = { message, onYes };
 }

@@ -1,6 +1,7 @@
 import { LIMITS } from '../../shared/api.ts';
 import { parseVoiceCommand } from '../../shared/voice-commands.ts';
 import type { PersonLike } from '../../shared/people-match.ts';
+import type { ProjectLike } from '../../shared/project-match.ts';
 import type { VoiceCommand } from '../../shared/types.ts';
 
 // Pure voice logic (no DOM, no store): mime handling, state transitions, what to do with a transcript
@@ -80,11 +81,11 @@ export type TranscriptAction =
   | { kind: 'command'; command: VoiceCommand }
   | { kind: 'dictation'; text: string };
 
-export function decideTranscript(transcript: unknown, people: PersonLike[]): TranscriptAction {
+export function decideTranscript(transcript: unknown, people: PersonLike[], projects: ProjectLike[] = []): TranscriptAction {
   if (typeof transcript !== 'string') return { kind: 'empty' };
   const text = transcript.trim();
   if (text === '') return { kind: 'empty' };
-  const command = parseVoiceCommand(text, people);
+  const command = parseVoiceCommand(text, people, projects);
   return command ? { kind: 'command', command } : { kind: 'dictation', text };
 }
 

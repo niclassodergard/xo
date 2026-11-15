@@ -16,7 +16,7 @@ class FakeWindow extends EventTarget {
 const { initVoice } = await import('./index.ts');
 const { startRecording } = await import('./recorder.ts');
 const { api } = await import('../lib/api.ts');
-const { engine, installKeyListeners, mode, registerCommand: _r } = await import('../lib/keys.ts');
+const { engine, installKeyListeners, registerCommand: _r } = await import('../lib/keys.ts');
 const { flash: _f, session, chatDraft, chatDraftSource, flashMessage } = await import('../lib/store.ts');
 void _r; void _f;
 
@@ -26,8 +26,8 @@ let cleanup: () => void;
 let globalEsc: ReturnType<typeof vi.fn<(e: KeyboardEvent) => void>>;
 let removeGlobalEsc: () => void;
 
-function key(type: 'keydown' | 'keyup', init: { key: string; code: string; altKey?: boolean; repeat?: boolean }): Event {
-  const ev = Object.assign(new Event(type, { cancelable: true }), { altKey: false, repeat: false, ...init });
+function key(type: 'keydown' | 'keyup', init: { key: string; code: string; altKey?: boolean; metaKey?: boolean; repeat?: boolean }): Event {
+  const ev = Object.assign(new Event(type, { cancelable: true }), { altKey: false, metaKey: false, repeat: false, ...init });
   win.dispatchEvent(ev);
   return ev;
 }
@@ -41,7 +41,6 @@ beforeEach(() => {
   win = new FakeWindow();
   Object.assign(globalThis, { window: win, document: win.document });
   session.value = { csrfToken: 't' };
-  mode.value = 'normal';
   chatDraft.value = '';
   rec.stop.mockReset().mockResolvedValue(new Blob(['a'], { type: 'audio/webm' }));
   rec.cancel.mockReset();
@@ -49,7 +48,7 @@ beforeEach(() => {
   vi.spyOn(api, 'postAudio').mockResolvedValue({ text: 'hello' });
   uninstall = installKeyListeners(win as unknown as Window);
   globalEsc = vi.fn<(e: KeyboardEvent) => void>();
-  removeGlobalEsc = engine.addLayer({ scope: 'global', modes: ['normal', 'insert', 'command'], bindings: [{ spec: 'esc', run: globalEsc }] });
+  removeGlobalEsc = engine.addLayer({ scope: 'global', bindings: [{ spec: 'esc', run: globalEsc }] });
   cleanup = initVoice();
 });
 afterEach(() => {
@@ -79,9 +78,8 @@ describe('initVoice key wiring', () => {
     expect(chatDraftSource.value).toBe('voice');
   });
 
-  it('Space does nothing in INSERT mode, Alt+Space works in any mode', async () => {
+  it('Space does nothing while a text field has focus, Option-Space works anywhere', async () => {
     win.document.activeElement = Object.assign(new El(), { type: 'text' }); // focus in a text input
-    mode.value = 'insert';
     key('keydown', SPACE);
     await flush();
     expect(startRecording).not.toHaveBeenCalled();
@@ -234,5 +232,101 @@ describe('initVoice key wiring', () => {
     expect(chatDraft.value).toBe('hello');
     expect(phaseText()).toBe('Dictation added to chat');
     overlay.value = null;
+  });
+
+  describe('Send/Discard prompt and Enter', () => {
+    const maxCall = () => vi.mocked(startRecording).mock.calls.at(-1)![0].onMaxLength;
+    const field = () => {
+      const f = Object.assign(new El(), { blur: vi.fn(() => { win.document.activeElement = null; }), focus: vi.fn(), isConnected: true });
+      win.document.activeElement = f;
+      return f;
+    };
+    const startToggle = async () => {
+      const { commandList } = await import('../lib/keys.ts');
+      commandList.value.find((c) => c.id === 'voice.dictate')!.run();
+      await flush();
+      vi.setSystemTime(Date.now() + 120_000);
+    };
+
+    it('not typing: the field is blurred at once and Enter sends the recording, not the draft', async () => {
+      const f = field();
+      await startToggle();
+      maxCall()(); await flush();
+      expect(f.blur).toHaveBeenCalled();
+      key('keydown', { key: 'Enter', code: 'Enter' }); await flush();
+      expect(api.postAudio).toHaveBeenCalledTimes(1);
+    });
+
+    it('a focused button or link is blurred too, so Enter cannot click it', async () => {
+      const b = Object.assign(new El(), { tagName: 'BUTTON', blur: vi.fn(() => { win.document.activeElement = null; }), isConnected: true });
+      win.document.activeElement = b;
+      await startToggle();
+      maxCall()(); await flush();
+      expect(b.blur).toHaveBeenCalled();
+      key('keydown', { key: 'Enter', code: 'Enter' }); await flush();
+      expect(api.postAudio).toHaveBeenCalledTimes(1);
+    });
+
+    it('typing when the prompt appears: the field keeps focus and Enter is not armed until typing stops', async () => {
+      const f = field();
+      await startToggle();
+      key('keydown', { key: 'a', code: 'KeyA' });
+      maxCall()(); await flush();
+      expect(f.blur).not.toHaveBeenCalled();
+      key('keydown', { key: 'a', code: 'KeyA' });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(f.blur).not.toHaveBeenCalled();
+      win.document.activeElement = null; // as if focus were elsewhere: Enter still must not send yet
+      key('keydown', { key: 'Enter', code: 'Enter' }); await flush();
+      expect(api.postAudio).not.toHaveBeenCalled();
+      win.document.activeElement = f;
+      await vi.advanceTimersByTimeAsync(1000); // 2 s after the last keystroke
+      expect(f.blur).toHaveBeenCalled();
+      win.document.activeElement = null;
+      key('keydown', { key: 'Enter', code: 'Enter' }); await flush();
+      expect(api.postAudio).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('held key at the limit', () => {
+    const maxCall = () => vi.mocked(startRecording).mock.calls.at(-1)![0].onMaxLength;
+
+    it('sends only with a recent auto-repeat keydown for the held key', async () => {
+      key('keydown', SPACE); await flush();
+      vi.setSystemTime(Date.now() + 119_500);
+      key('keydown', { ...SPACE, repeat: true });
+      vi.setSystemTime(Date.now() + 500);
+      maxCall()(); await flush();
+      expect(api.postAudio).toHaveBeenCalledTimes(1);
+    });
+
+    it('without auto-repeat proof (lost keyup) it shows the prompt and sends nothing', async () => {
+      key('keydown', SPACE); await flush();
+      vi.setSystemTime(Date.now() + 120_000);
+      maxCall()(); await flush();
+      expect(api.postAudio).not.toHaveBeenCalled();
+      expect(rec.stop).toHaveBeenCalledTimes(1); // stopped, audio held for Send/Discard
+    });
+
+    it('a keydown with Cmd during the hold ends the hold: no auto-send even with repeats', async () => {
+      key('keydown', SPACE); await flush();
+      key('keydown', { key: 'Meta', code: 'MetaLeft', metaKey: true });
+      key('keydown', { ...SPACE, repeat: true, metaKey: true });
+      vi.setSystemTime(Date.now() + 120_000);
+      maxCall()(); await flush();
+      expect(api.postAudio).not.toHaveBeenCalled();
+    });
+  });
+
+  it('dictation never navigates or moves focus when the user typed during the transcription', async () => {
+    let resolve: (v: { text: string }) => void = () => {};
+    vi.spyOn(api, 'postAudio').mockReturnValue(new Promise((r) => { resolve = r; }));
+    key('keydown', SPACE); await flush();
+    vi.setSystemTime(Date.now() + 1000);
+    key('keyup', SPACE); await flush();
+    key('keydown', { key: 'x', code: 'KeyX' }); // typed while the audio is being transcribed
+    resolve({ text: 'hello' }); await flush();
+    expect(chatDraft.value).toBe('hello');
+    expect(phaseText()).toBe('Dictation added to chat');
   });
 });

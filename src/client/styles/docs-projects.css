@@ -1,0 +1,28 @@
+/* Projects list and Project document. Tokens only. */
+.projects-doc, .project-doc { display: flex; flex-direction: column; gap: var(--s5); }
+.proj-group { display: flex; flex-direction: column; gap: var(--s2); }
+.proj-group-title, .project-section-title {
+  margin: 0; font-size: 0.8125em; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--fg-muted);
+}
+.proj-title { font-weight: 500; }
+.proj-count { margin-left: var(--s3); font-size: 0.875em; }
+
+.project-section { display: flex; flex-direction: column; gap: var(--s2); }
+.project-head { display: flex; flex-direction: column; gap: var(--s3); }
+.project-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s3); }
+.project-meta label { display: flex; align-items: center; gap: var(--s2); color: var(--fg-muted); }
+.project-select {
+  min-height: 36px; padding: 0 var(--s3); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--bg); color: var(--fg); font-size: max(1em, 16px);
+}
+.project-aliases { flex: 1 1 200px; min-width: 0; }
+.project-title-edit .textedit { font-size: 1.25em; font-weight: 600; }
+.project-add-row { display: flex; gap: var(--s2); align-items: center; }
+.project-toggle { align-self: flex-start; }
+.project-danger { margin-top: var(--s4); align-self: flex-start; }
+.proj-done-text { text-decoration: line-through; color: var(--fg-muted); }
+.proj-tag { margin-left: var(--s3); font-size: 0.8125em; color: var(--fg-muted); }
+
+@media (max-width: 899.98px) {
+  .project-select { min-height: 44px; }
+}

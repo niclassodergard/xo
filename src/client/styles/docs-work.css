@@ -1,0 +1,30 @@
+/* Work documents: Actions, Notes, Note. Tokens only. */
+
+.work-doc { display: flex; flex-direction: column; gap: var(--s4); }
+.work-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s3); }
+.work-toggle { display: inline-flex; align-items: center; gap: var(--s2); min-height: 36px; cursor: pointer; }
+.work-toggle input { width: 18px; height: 18px; accent-color: var(--accent); }
+.work-error { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s3); }
+
+.work-group { display: flex; flex-direction: column; gap: var(--s2); }
+.work-group-title { font-size: 0.95em; color: var(--fg-muted); padding: 0 var(--s3); }
+
+.work-action { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s2); }
+.work-check { color: var(--fg-muted); }
+.work-action.done .work-text { text-decoration: line-through; color: var(--fg-muted); }
+.work-meta { font-size: 0.875em; }
+
+.work-note { display: flex; flex-direction: column; gap: 2px; }
+.work-note-title { font-weight: 600; }
+.work-note-preview { overflow-wrap: anywhere; }
+
+.work-note-doc textarea.textedit { min-height: 40vh; white-space: pre-wrap; }
+.work-links { display: flex; flex-direction: column; gap: var(--s2); }
+.work-link { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s3); }
+.work-link > .muted { flex: 0 0 5em; }
+.work-link > span:nth-child(2) { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.work-danger { display: flex; }
+
+@media (max-width: 899.98px) {
+  .work-toggle { min-height: 44px; }
+}

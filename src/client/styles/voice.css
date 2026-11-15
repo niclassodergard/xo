@@ -1,0 +1,17 @@
+/* Voice (step C7): the mic button wrapper and the shell-level status bar (recording, transcribing, Send/Discard).
+   The base `.mic` look lives in shell.css. */
+.mic-wrap { display: inline-flex; flex: 0 0 auto; }
+.mic.recording { font-variant-numeric: tabular-nums; }
+
+.voice-status {
+  position: fixed; left: 50%; transform: translateX(-50%); z-index: 60;
+  top: calc(var(--s3) + env(safe-area-inset-top));
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: var(--s2);
+  width: max-content; max-width: calc(100vw - 2 * var(--s4)); box-sizing: border-box;
+  padding: var(--s2) var(--s3); border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-raised); color: var(--fg); box-shadow: var(--shadow);
+}
+.voice-status.confirm { border-color: var(--accent); }
+.voice-status-text { flex: 1 1 auto; text-align: center; }
+.voice-status:not(.confirm) { flex-wrap: nowrap; white-space: nowrap; }
+.voice-status:not(.confirm) .voice-status-text { overflow: hidden; text-overflow: ellipsis; }

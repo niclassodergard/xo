@@ -1,8 +1,11 @@
 # XO — project guide for Claude
 
-XO is a single-user "run my life" webapp for a CEO. It is a web app that looks
-like a TUI. Text and voice typed into a chat interface are classified into
-documents (notes, tasks, people, 1-1 meetings) or attached to a person. A core
+XO is a single-user "run my life" webapp for a CEO, with a UI modelled on the
+Claude desktop app (sidebar, one conversation stream, a document panel; since
+v0.2, which replaced the v0.1 TUI look). Text and voice typed into the
+conversation are classified into documents (notes, actions, people, projects,
+1-1 meetings) or attached to a person or project, and questions about the
+user's own data are answered from it. A core
 use case is preparing and running many 1-1 meetings.
 
 **Keep this file current.** It is how Claude keeps control of the project across
@@ -36,6 +39,19 @@ added, and — always — when a mistake is made (see "Lessons learned" below).
   13. `docker build` and run, non-root, `/data`: blocked (Docker not installed)
   14. monospace, box-drawing, dark, one accent, phone width: pass at 390px in Chromium; use on a real phone: manual
 - **Outstanding manual checks:** `docker build` and run (Docker was not installed; Dockerfile unverified), real OpenRouter classification and transcription (needs the user's OK), push-to-talk on real Chrome/Safari desktop and iOS (incl. the Send/Discard prompt on a real phone), real authenticator app, `tailscale serve` header behaviour (README checklist), audio ZDR enforcement at OpenRouter.
+- **User instruction for v0.2 (2026-11-15):** run all steps without asking in
+  between; when every step has a clean review, commit + push and deploy (D2,
+  with the DB backup). Live OpenRouter checks still need the user's OK.
+- **v0.2 implemented and reviewed (2026-11-15):** `docs/plans/2026-11-15-xo-v0.2-ui.md`
+  (C1 contracts: `docs/plans/2026-11-15-xo-v0.2-c1-contracts.md`). Claude-desktop-style
+  UI, Projects (with pins/recents) and question answering. Every step (S1–S4,
+  C1–C7, E, Q1, Q2) passed review and security review. `pnpm typecheck`,
+  `pnpm test` (1167), `pnpm build` and `pnpm e2e` (82, keyboard-only flows, 390 px,
+  light/dark) pass. Acceptance criteria 1–20 pass automatically except the manual
+  checks: real Chrome/Safari shortcut delivery (Cmd-K/J/B/N, Option-Space with
+  launchers), installed-app Cmd-N, iPhone Safari, live theme switch, a live
+  OpenRouter classification + Q&A round trip (needs the user's OK; also confirms
+  the reasoning settings), `docker build`, audio ZDR.
 - Update this section as milestones land.
 
 ## Production (user's tailnet instance)
@@ -55,6 +71,8 @@ added, and — always — when a mistake is made (see "Lessons learned" below).
   `pnpm install --frozen-lockfile --offline && pnpm build`, restart the server
   (`node --env-file=$HOME/.xo/xo.env src/server/main.ts` from `~/.xo/app`),
   then verify the served page's JS asset returns 200 over the tailnet URL.
+  When the commit carries a migration, first stop the server and back up
+  `~/.xo/xo.db` (+ `-wal`/`-shm`) to `~/.xo/backups/` (0600).
   Sessions live in the DB, so a restart doesn't log the user out.
 - The server currently runs as a background process of the Claude session; it
   stops when the session ends (no launchd service yet).
@@ -65,13 +83,15 @@ added, and — always — when a mistake is made (see "Lessons learned" below).
 |---|---|
 | Users / access | Single user, password + TOTP login. **Reachable only over Tailscale** (user decision 2026-11-15, replaces "public server"): XO is not exposed to the internet; `tailscale serve` provides HTTPS on the tailnet (needed for the microphone). Stay portable: one Node process + SQLite file, Dockerfile. Login/auth hardening stays in place as defence in depth. |
 | Auth | Password + TOTP. Secure session cookie (HttpOnly, Secure, SameSite), rate-limited login, CSRF protection. |
-| Doc types | Notes, tasks/actions, people, 1-1 meetings (agendas + meeting notes). Out of scope: journal, projects, decisions, goals. |
-| Classification | LLM classifies chat input. **If unsure it must not guess** — it asks the user to classify (keyboard-selectable inline choice). Confident results are filed visibly with one-key undo/reclassify. Prefix commands (`/note`, `/todo`, `@person`…) force the type. |
+| Doc types | Notes, actions, people, 1-1 meetings (agendas + meeting notes), and (v0.2) projects: title, status active/on hold/done, description, notes, actions, linked people. An action has an optional project and an optional person. Deleting a project keeps its actions and notes (unlinked). Out of scope: journal, decisions, goals. |
+| Classification | LLM classifies chat input. **If unsure it must not guess** — it asks the user to classify (keyboard-selectable inline choice). Confident results are filed visibly with one-key undo/reclassify. Prefix commands (`/note`, `/todo`, `/ask`, `@person`, `#project`…) force the type. Unknown people and projects: ask before creating; a project is linked silently only by `#mention` or an exact multi-word title. |
 | People | Known names/aliases link automatically; unknown names → ask before creating a person. |
 | LLM | OpenRouter only (one key, server env var), Claude model, configurable. ZDR is **off by default for now** (user decision 2026-11-15): `XO_OPENROUTER_ZDR=true` turns on `provider: { zdr: true }` on every request, with no retry without it. Classifier sits behind an interface; tests use a fake. |
-| Voice | Push-to-talk; browser records (MediaRecorder) → our server → OpenRouter `/api/v1/audio/transcriptions` (ZDR per `XO_OPENROUTER_ZDR`). Dictation + a small set of voice commands ("open Anna", "start 1-1 with Anna"). |
+| Voice | Push-to-talk; browser records (MediaRecorder) → our server → OpenRouter `/api/v1/audio/transcriptions` (ZDR per `XO_OPENROUTER_ZDR`). Dictation + a small set of voice commands ("open Anna", "open <project>", "start 1-1 with Anna"). Mic button in the composer; recording state and the limit prompt in a shell-level status bar. |
 | 1-1 loop | Agenda items accumulate per person; "start 1-1" opens agenda + notes; check off items, unfinished carry over; follow-ups with owner (me/them); previous meeting's notes visible. No cadence/reminders yet. |
-| TUI | Vim-style modal keys (j/k, g-prefixes, `/` search, `:` / Ctrl-K palette), box-drawing panes, monospace, neutral dark theme with one accent. Mouse/touch secondary. |
+| UI (v0.2) | Claude-desktop style: sidebar (New, Search, Actions, Notes, People, Projects, Pinned, Recents), one ongoing conversation stream on the left, the opened document in a closable/expandable right panel; phone: drawer + one panel at a time. System light/dark, system font. No modes: Cmd-K palette/search, Cmd-J composer (Cmd-N best effort), Cmd-B sidebar, Esc ladder, arrows + Enter in every list, Option-Space push-to-talk. Mouse/touch secondary (44 px targets on phones). |
+| Pins / recents | Stored server-side (ids only); recents recorded only by user-initiated opens. |
+| Q&A (v0.2) | `/ask` or a confidently classified question is answered from local excerpts only (≤ 24, 600 chars each, 12 000 total; nothing sent without a match) by `XO_QA_MODEL` (Sonnet). Answers cite sources, are snapshots, and are redacted when any used item is deleted; undo erases them. |
 | Storage | One SQLite file **outside the repo** (default `~/.xo/xo.db`, env-configurable, Docker volume). Bodies stored as Markdown. Markdown export command for backup. |
 | Calendar | None in v0.1. |
 | Stack | pnpm, TypeScript strict, one package: `src/server`, `src/client`, `src/shared`. Fastify + built-in `node:sqlite`. Vite + Preact, hand-written TUI CSS. Vitest; one Playwright smoke test. |
@@ -94,7 +114,7 @@ Keep this list accurate — every command here must work. Needs Node 26 and pnpm
 | `pnpm test` | Vitest (unit + API tests incl. `test/integration/app.test.ts`, the full-app route sweep; no network, no API key needed) |
 | `pnpm build` | `vite build` (client root `src/client`) into `dist/client` |
 | `pnpm start` | Run the server (serves API + `dist/client`) with Node type stripping |
-| `pnpm e2e` | Playwright smoke test (keyboard-only, `e2e/smoke.spec.ts`). `e2e/global-setup.ts` runs `pnpm build`, creates a temp DB + user via `setupUser`, starts the real server on a free 127.0.0.1 port with `XO_LLM=fake` (no `.env`, no key), tears it down. First time (or when it warns that no browser was found): `pnpm exec playwright install chromium`. If the bundled browser is missing it uses the newest `chrome-headless-shell` in the Playwright cache (logs which one, warns on a version mismatch); override with `XO_E2E_CHROMIUM=/path/to/chrome`. `XO_E2E_SKIP_BUILD=1` skips the build step. Needs no other server on its port (picked at random) |
+| `pnpm e2e` | Playwright specs per area (`e2e/*.spec.ts`; `pnpm e2e e2e/<area>.spec.ts` runs one). `e2e/global-setup.ts` builds the client into a per-run temp dir, starts `e2e/server.ts` with pre-made sessions, creates a temp DB + user via `setupUser`, starts the real server on a free 127.0.0.1 port with `XO_LLM=fake` (no `.env`, no key), tears it down. First time (or when it warns that no browser was found): `pnpm exec playwright install chromium`. If the bundled browser is missing it uses the newest `chrome-headless-shell` in the Playwright cache (logs which one, warns on a version mismatch); override with `XO_E2E_CHROMIUM=/path/to/chrome`. `XO_E2E_SKIP_BUILD=1` skips the build step. Needs no other server on its port (picked at random) |
 | `pnpm xo setup [--force]` | Create the single user (password + TOTP) |
 | `pnpm xo export [--out <dir>]` | Markdown export (default `./xo-export-YYYYMMDD-HHmmss`; target must be new or empty; dir 0700, files 0600; skips soft-deleted rows) |
 | `docker build -t xo .` | Container image (non-root, `/data` volume, no key inside; supply the key at run time). README has the `docker run` and `tailscale serve` setup (Caddy is an optional alternative). Not yet built locally: Docker was unavailable in step 11 |
@@ -139,20 +159,29 @@ Established in step 1. Every programmer brief must point at this section.
   `style="..."` in the client (setting `el.style` from JS is fine).
 - **Tests:** use `test/helpers.ts` (`makeTestDb`, `makeDeps`, `makeRouteApp`)
   and the fake classifier/transcriber.
-- **Client keyboard and focus:** key layers (`useKeys`) and overlay focus
-  register in `useLayoutEffect`, never `useEffect`. Overlays use the `modal`
-  scope (only Esc and Ctrl-K pass through) and `components/Overlay.tsx`. Views
-  that own the chat or search input consume focus requests with
-  `useFocusRequest('chat' | 'search', ...)`. Async results check the session
-  `epoch()` before writing shared signals.
+- **Client keyboard and focus (v0.2, no modes):** contracts are in
+  `docs/plans/2026-11-15-xo-v0.2-c1-contracts.md`. Key layers (`useKeys`, scopes
+  `modal | panel | stream | global`) and focus targets
+  (`registerFocusTarget('composer' | 'panel')`) register in `useLayoutEffect`.
+  Overlays use the `modal` scope (only Esc and Cmd-K pass through) and
+  `components/Overlay.tsx`. Typing in a text entry always types; a printable key
+  elsewhere goes to the composer. One interaction pattern everywhere (`List`):
+  Up/Down rows, Left/Right action chips, Enter runs; no single-letter commands;
+  a repeated Enter never runs anything. Open documents only through `openDoc`
+  (`openDocAsync(ref, keystrokeMark())` after an await, so focus never moves if
+  the user typed); close with `closePanel()`. Recents are never recorded on
+  route load. Async results check the session `epoch()` before writing shared
+  signals. `List` add fields need an entity-qualified `draftId`. CSS: tokens
+  only, one CSS file per area.
 - **Navigation:** when a view's Esc/back target is the entry just left, use
   `replace` (or `back()` if history holds it), so two views never ping-pong.
-- **Browser testing:** rebuild and restart the server *immediately* before each
-  browser run (parallel builds replace `dist/` and break a cached `index.html`);
-  clear fields with `page.fill(sel, '')`. After `pnpm build`, restart any running XO server
-  (it caches `index.html`). Scripts that log in must wait out the 30 s TOTP step
-  or create a fresh user per run (`setupUser`, confirming with the previous
-  step's code).
+- **Browser testing (v0.2):** `pnpm e2e` builds the client into a per-run temp
+  directory and starts `e2e/server.ts` with pre-made sessions (storage state);
+  `pnpm e2e e2e/<area>.spec.ts` runs one spec, and parallel programmers can run
+  their own specs at once. Seed data with area-prefixed names (shared DB); use
+  `sparePage(n)` for logout/lock tests. Clear fields with `page.fill(sel, '')`.
+  For manual runs: after `pnpm build`, restart any running XO server (it caches
+  `index.html`); scripts that log in must wait out the 30 s TOTP step.
 - **Local dev uses `XO_LLM=fake`:** with `.openrouter-key` present and `XO_LLM` unset, the server calls OpenRouter for real (costs money, sends data out) — that needs the user's OK.
 
 ## Security rules (non-negotiable)
@@ -176,8 +205,11 @@ rule below still applies as defence in depth (treat any tailnet device as untrus
 - Treat all user input and all LLM output as untrusted (escape on render,
   validate on the server, parameterized SQL only).
 - Do not log note contents, transcripts, or credentials.
-- Auth, network calls to OpenRouter, storage, and file export are
-  security-sensitive: changes to them get a `@security-reviewer` pass.
+- Auth, network calls to OpenRouter (classification, transcription and
+  question answering), storage, and file export are security-sensitive:
+  changes to them get a `@security-reviewer` pass.
+- Deletion rules (v0.2): projects and stored answers follow plan 4.7 / 4.10:
+  every copy is erased (captures scrubbed, answers redacted then purged).
 
 ## Workflow
 
@@ -469,3 +501,28 @@ pointed out by the user.
   in review. **Strengthened rule:** after *every* fix round that changes a
   contract, rewrite the affected plan amendment before sending the step back to
   review — the amendment is part of the fix.
+- **2026-11-15 — Widening a union broke a negative type guard.** S1 added
+  `'project'` to `ItemRef.kind`; `isItemRef` was `kind !== 'person'`, so project
+  refs passed and undo would have soft-deleted an unrelated agenda item with the
+  same id. TypeScript does not verify type predicates. **Rule:** type guards and
+  dispatch over a kind are positive allow-lists with an explicit branch per kind
+  (no catch-all `else`); when widening a union, grep every guard and `switch` on it.
+- **2026-11-15 — Programmers touched the git index.** Two programmers ran
+  `git rm --cached` while moving or deleting files, staging deletions in a
+  shared checkout (once the whole client). **Rule:** programmers never run git
+  commands that change the index or history (`git rm`, `git mv`, `git add`,
+  `git reset`, `git stash`, `git checkout`); delete and move files with plain
+  filesystem commands. Programmer briefs say so, and the coordinator checks
+  `git diff --cached` before every review and commit.
+- **2026-11-15 — A review ran while its files were being rewritten.** I sent
+  C7's security findings back to its programmer while the code review of C7 was
+  still reading the same files, so that review saw a moving target and had to be
+  repeated. **Rule:** never send fixes for a step while any review of that step
+  is still running; wait for all of its reviews, then send one combined fix round.
+- **2026-11-15 — The lock screen could lose focus.** Login focused the password
+  field once on mount; a queued `focusTarget` or an unmounting view could take
+  focus afterwards, so after a 401 the user typed into nothing (found as a 1-in-2
+  e2e flake). **Rule:** a modal that covers an inert shell keeps focus inside
+  itself (focusin/focusout guard), and queued focus requests are dropped when the
+  session ends. Treat an intermittent e2e failure as a possible product bug until
+  the cause is known.

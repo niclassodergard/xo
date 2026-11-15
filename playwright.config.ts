@@ -3,8 +3,9 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { chromium, defineConfig } from '@playwright/test';
 
-// The smoke test drives the real built app (see e2e/global-setup.ts): a temp DB, XO_LLM=fake, a user
-// created through the setup function, a free port on 127.0.0.1. Nothing here touches OpenRouter.
+// The specs drive the real built app (see e2e/global-setup.ts): a client build in a temp directory, a temp DB,
+// XO_LLM=fake, one user plus pre-made sessions, e2e/server.ts on a free port on 127.0.0.1. Nothing here touches
+// OpenRouter. One spec file per client area (e2e/<area>.spec.ts); run one with `pnpm e2e e2e/<area>.spec.ts`.
 
 function cacheDir(): string {
   const fromEnv = process.env['PLAYWRIGHT_BROWSERS_PATH'];
@@ -68,17 +69,21 @@ function chromiumPath(): string | undefined {
   return chosen;
 }
 
+// One output directory per run (set once, so every worker of this run agrees), so specs run in parallel from
+// separate shells never clobber each other's results.
+process.env['XO_E2E_RUN_ID'] ??= `${Date.now().toString(36)}-${process.pid}`;
+
 export default defineConfig({
   testDir: './e2e',
   globalSetup: './e2e/global-setup.ts',
-  // One server, one user, one browser session: the spec is a single ordered flow.
+  // One server, one DB and one stream shared by all specs: they run one after another.
   fullyParallel: false,
   workers: 1,
   retries: 0,
   timeout: 90_000,
   expect: { timeout: 10_000 },
   reporter: [['list']],
-  outputDir: 'test-results',
+  outputDir: join('test-results', process.env['XO_E2E_RUN_ID']!),
   use: {
     trace: 'off',
     launchOptions: {

@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { createDraftSaver } from '../lib/draft-saver.ts';
-import { composing } from '../lib/keys.ts';
+import { focusTarget } from '../lib/focus.ts';
+import { composing, modalOpen } from '../lib/keys.ts';
 import { clearDraft, drafts, epoch, errorText, flash, session, syncDraft } from '../lib/store.ts';
 
 /**
@@ -78,11 +79,13 @@ export function TextEdit(props: {
   }, []);
 
   const onKeyDown = (e: KeyboardEvent) => {
-    if (composing(e)) return;
-    if (e.key === 'Escape') { e.preventDefault(); el.current?.blur(); return; }
+    if (composing(e) || modalOpen()) return;
+    // Leaving the field saves it (blur) and hands focus to the panel, so the next Esc closes the document.
+    const leave = () => { el.current?.blur(); focusTarget('panel', { queue: false }); };
+    if (e.key === 'Escape') { e.preventDefault(); leave(); return; }
     if (e.key === 'Enter' && (!props.multiline || e.ctrlKey || e.metaKey)) {
       e.preventDefault();
-      el.current?.blur();
+      leave();
     }
   };
   const common = {

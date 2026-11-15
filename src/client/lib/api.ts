@@ -15,7 +15,7 @@ export class ApiError extends Error {
   }
 }
 
-type Method = 'GET' | 'POST' | 'PATCH' | 'DELETE';
+type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
 /** Only same-origin /api paths: the CSRF token must never be sent anywhere else. */
 function assertApiPath(path: string): void {
@@ -93,6 +93,8 @@ export const api = {
   get: <T>(path: string): Promise<T> => request<T>('GET', path),
   post: <T>(path: string, body?: unknown): Promise<T> => request<T>('POST', path, body),
   patch: <T>(path: string, body: unknown): Promise<T> => request<T>('PATCH', path, body),
+  /** PUT without a body unless given (the pin and project-person link routes reject a body). */
+  put: <T>(path: string, body?: unknown): Promise<T> => request<T>('PUT', path, body),
   del: async (path: string): Promise<void> => { await request<void>('DELETE', path); },
   postAudio: (path: string, blob: Blob, signal?: AbortSignal): Promise<{ text: string }> =>
     request<{ text: string }>('POST', path, undefined, blob, true, signal),

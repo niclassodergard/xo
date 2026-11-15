@@ -26,7 +26,8 @@ describe('migration 004 (AUTOINCREMENT for captures)', () => {
     expect(currentVersion(db)).toBeGreaterThanOrEqual(4);
     expect(db.prepare('SELECT * FROM captures').all()).toEqual([
       { id: 12, text: 'hello', source: 'voice', status: 'filed', draft: '{"k":1}', question: null,
-        filed: '[{"kind":"note","id":3}]', summary: 'Note: hello', classified_by: 'llm', created_at: TS, updated_at: TS },
+        filed: '[{"kind":"note","id":3}]', summary: 'Note: hello', classified_by: 'llm', created_at: TS, updated_at: TS,
+        answer: null, sources: null }, // columns added by migration 006
     ]);
     expect((db.prepare("SELECT sql FROM sqlite_master WHERE name = 'captures'").get() as { sql: string }).sql).toContain('AUTOINCREMENT');
     const ins = (status: string, source = 'text', by: string | null = null) =>
